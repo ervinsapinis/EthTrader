@@ -16,10 +16,19 @@ namespace KrakenTelegramBot.Services
         // Strategy parameters
         private const string TradingPair = "ETH/EUR";
         private const KlineInterval Interval = KlineInterval.OneHour;
-        private const int KlineCount = 50;  // Changed from 'limit' to 'count'
+        private const int KlineCount = 50;
         private const int RsiPeriod = 14;
-        private const decimal OversoldThreshold = 30m;
-        private const decimal FixedEurInvestment = 50m; // amount in EUR to spend per trade
+        private const decimal DefaultOversoldThreshold = 30m;
+        private const decimal DowntrendOversoldThreshold = 20m;
+        // Stop-loss percentage (e.g., 5% below entry price)
+        private const decimal StopLossPercentage = 0.05m;
+
+        // For adaptive risk, we'll use our dynamic tiers.
+        // (The risk percentage is determined by current equity.)
+
+        // For this example, let's simulate current equity.
+        // In a live bot, you would fetch this from your Kraken account.
+        private const decimal SimulatedEquity = 500m;
 
         public StrategyService(KrakenService krakenService, TelegramService telegramService)
         {
@@ -37,28 +46,47 @@ namespace KrakenTelegramBot.Services
                 return;
             }
 
-            // Extract closing prices using ClosePrice instead of Close
+            // Extract closing prices using ClosePrice
             var closes = klinesResult.Data.Select(k => k.ClosePrice).ToList();
+
+            // Calculate RSI
             var rsiValues = IndicatorUtils.CalculateRsi(closes, RsiPeriod);
             if (!rsiValues.Any())
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate RSI.");
                 return;
             }
-
             var latestRsi = rsiValues.Last();
-            Console.WriteLine($"Latest RSI: {latestRsi:F2}");
 
-            if (latestRsi < OversoldThreshold)
+            // Calculate SMA for trend awareness
+            decimal sma = IndicatorUtils.CalculateSma(closes, 50);
+            decimal currentPrice = closes.Last();
+            bool isDowntrend = currentPrice < sma;
+            decimal adaptiveOversoldThreshold = isDowntrend ? DowntrendOversoldThreshold : DefaultOversoldThreshold;
+
+            // Calculate MACD for additional confirmation (optional)
+            var macdResult = IndicatorUtils.CalculateMacd(closes);
+            decimal latestHistogram = macdResult.Histogram.Last();
+
+            Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA: {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
+            Console.WriteLine(isDowntrend ? "Downtrend detected." : "Uptrend detected.");
+
+            // Decide to trade if conditions are met
+            // Now, instead of using a fixed investment, calculate the position size dynamically.
+            if (latestRsi < adaptiveOversoldThreshold && latestHistogram > 0)
             {
-                decimal currentPrice = closes.Last();
-                decimal quantityToBuy = FixedEurInvestment / currentPrice;
-                string orderMessage = $"RSI {latestRsi:F2} below {OversoldThreshold}. Buying {quantityToBuy:F6} ETH at {currentPrice:F2} EUR.";
+                // Retrieve current equity; here we simulate with SimulatedEquity.
+                decimal currentEquity = SimulatedEquity; // Replace with actual account equity fetch in production.
+                decimal riskPercentage = RiskManagementUtils.GetRiskPercentage(currentEquity);
+                decimal quantityToBuy = RiskManagementUtils.CalculatePositionSize(currentEquity, currentPrice, riskPercentage, StopLossPercentage);
+
+                string orderMessage = $"Conditions met:\nRSI: {latestRsi:F2} (< {adaptiveOversoldThreshold}), MACD Histogram: {latestHistogram:F2}.\nCurrent Equity: {currentEquity} EUR, Risk: {riskPercentage:P0}.\nCalculated to buy {quantityToBuy:F6} ETH at {currentPrice:F2} EUR.";
 
                 var orderResult = await _krakenService.PlaceMarketBuyOrderAsync(TradingPair, quantityToBuy, ct);
                 if (orderResult.Success)
                 {
                     orderMessage += "\nBuy order executed successfully.";
+                    // Here, you would also set a protective stop-loss order.
                 }
                 else
                 {
@@ -69,7 +97,7 @@ namespace KrakenTelegramBot.Services
             }
             else
             {
-                string holdMessage = $"RSI {latestRsi:F2} is above threshold. No trade executed.";
+                string holdMessage = $"No trade: Latest RSI is {latestRsi:F2} (adaptive threshold: {adaptiveOversoldThreshold}), or MACD histogram is not positive (latest: {latestHistogram:F2}).";
                 Console.WriteLine(holdMessage);
                 await _telegramService.SendNotificationAsync(holdMessage);
             }
