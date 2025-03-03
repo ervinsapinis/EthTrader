@@ -48,5 +48,23 @@ namespace KrakenTelegramBot.Services
                 quantity: quantity,
                 ct: ct);
         }
+
+        public async Task<WebCallResult<KrakenPlacedOrder>> PlaceStopLossOrderAsync(
+            string tradingPair,
+            decimal quantity,
+            decimal stopPrice,
+            CancellationToken ct = default)
+        {
+            // Using Kraken's order endpoint for stop-loss orders:
+            return await _restClient.SpotApi.Trading.PlaceOrderAsync(
+                symbol: tradingPair,
+                side: OrderSide.Sell,
+                type: OrderType.StopLoss,  // or OrderType.StopLossLimit if needed
+                quantity: quantity,
+                price: stopPrice,          // the trigger price for stop-loss
+                ct: ct
+            );
+        }
+
     }
 }

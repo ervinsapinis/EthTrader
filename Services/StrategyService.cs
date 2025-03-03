@@ -38,6 +38,7 @@ namespace KrakenTelegramBot.Services
 
         public async Task ExecuteStrategyAsync(CancellationToken ct = default)
         {
+            var settings = Config.BotSettings;
             // Retrieve klines
             var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(TradingPair, Interval, KlineCount, ct);
             if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
@@ -76,7 +77,15 @@ namespace KrakenTelegramBot.Services
             if (latestRsi < adaptiveOversoldThreshold && latestHistogram > 0)
             {
                 // Retrieve current equity; here we simulate with SimulatedEquity.
-                decimal currentEquity = SimulatedEquity; // Replace with actual account equity fetch in production.
+                var balancesResult = await _krakenService.GetBalancesAsync(ct);
+                if (!balancesResult.Success)
+                {
+                    await _telegramService.SendNotificationAsync("Error fetching account balance: " + balancesResult.Error);
+                    return;
+                }
+
+                // Assume that the balance for EUR is under the key "ZEUR" (check Kraken's asset naming conventions)
+                decimal currentEquity = balancesResult.Data.ContainsKey("ZEUR") ? balancesResult.Data["ZEUR"] : 0m;
                 decimal riskPercentage = RiskManagementUtils.GetRiskPercentage(currentEquity);
                 decimal quantityToBuy = RiskManagementUtils.CalculatePositionSize(currentEquity, currentPrice, riskPercentage, StopLossPercentage);
 
@@ -86,7 +95,12 @@ namespace KrakenTelegramBot.Services
                 if (orderResult.Success)
                 {
                     orderMessage += "\nBuy order executed successfully.";
-                    // Here, you would also set a protective stop-loss order.
+                    decimal stopPrice = currentPrice * (1 - settings.StopLossPercentage);
+                    var stopLossResult = await _krakenService.PlaceStopLossOrderAsync(settings.TradingPair, quantityToBuy, stopPrice, ct);
+                    if (stopLossResult.Success)
+                        orderMessage += $"\nStop-loss order placed at {stopPrice:F2} EUR.";
+                    else
+                        orderMessage += $"\nError placing stop-loss order: {stopLossResult.Error}";
                 }
                 else
                 {
