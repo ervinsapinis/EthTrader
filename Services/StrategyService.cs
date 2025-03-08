@@ -30,6 +30,21 @@ namespace EthTrader.Services
         {
             try
             {
+                // Check for existing orders first
+                bool hasExistingOrders = await ManageExistingOrdersAsync(_botSettings.TradingPair, ct);
+                
+                // Log current account status
+                var balancesResult = await _krakenService.GetBalancesAsync(ct);
+                if (balancesResult.Success)
+                {
+                    string balanceInfo = "Current balances:\n";
+                    foreach (var balance in balancesResult.Data.Where(b => b.Value > 0))
+                    {
+                        balanceInfo += $"- {balance.Key}: {balance.Value}\n";
+                    }
+                    await ErrorLogger.LogErrorAsync("StrategyService.ExecuteStrategyAsync", balanceInfo);
+                }
+                
                 await CheckBuySignalsAsync(ct);
                 await CheckSellSignalsAsync(ct);
                 
@@ -403,6 +418,29 @@ namespace EthTrader.Services
             // Check if we should set up a trailing stop instead of selling
             if (!shouldSell && currentProfit >= _botSettings.TrailingStopActivationProfit)
             {
+                // First check if we already have open orders
+                var openOrdersResult = await _krakenService.GetOpenOrdersAsync(ct);
+                
+                if (!openOrdersResult.Success)
+                {
+                    await _telegramService.SendNotificationAsync($"Error checking open orders: {openOrdersResult.Error}");
+                    return;
+                }
+                
+                // Check if there's already a stop loss order for this trading pair
+                var existingStopOrders = openOrdersResult.Data
+                    .Where(o => o.Symbol == _botSettings.TradingPair && 
+                               (o.Type == OrderType.StopLoss || o.Type == OrderType.Stop))
+                    .ToList();
+                
+                if (existingStopOrders.Any())
+                {
+                    await _telegramService.SendNotificationAsync(
+                        $"Trailing stop already exists. Current profit: {currentProfit:P2}. " +
+                        $"Existing stop orders: {existingStopOrders.Count}");
+                    return;
+                }
+                
                 // Set up trailing stop for remaining position
                 decimal trailingStopOffset = currentPrice * _botSettings.TrailingStopPercentage;
                 
@@ -421,6 +459,12 @@ namespace EthTrader.Services
                 else
                 {
                     await _telegramService.SendNotificationAsync($"Error setting trailing stop: {trailingStopResult.Error}");
+                    
+                    // Log detailed error for debugging
+                    await ErrorLogger.LogErrorAsync("StrategyService.CheckSellSignalsAsync", 
+                        $"Failed to place trailing stop. Error: {trailingStopResult.Error}, " +
+                        $"ETH Balance: {ethBalance}, Current Price: {currentPrice}, " +
+                        $"Current Profit: {currentProfit:P2}");
                 }
             }
 
@@ -470,6 +514,53 @@ namespace EthTrader.Services
             }
         }
         
+        
+        /// <summary>
+        /// Checks and manages existing orders to avoid conflicts
+        /// </summary>
+        private async Task<bool> ManageExistingOrdersAsync(string symbol, CancellationToken ct = default)
+        {
+            try
+            {
+                // Get all open orders
+                var openOrdersResult = await _krakenService.GetOpenOrdersAsync(ct);
+                if (!openOrdersResult.Success)
+                {
+                    await _telegramService.SendNotificationAsync($"Error checking open orders: {openOrdersResult.Error}");
+                    return false;
+                }
+                
+                // Filter orders for the specified symbol
+                var existingOrders = openOrdersResult.Data
+                    .Where(o => o.Symbol == symbol)
+                    .ToList();
+                
+                if (existingOrders.Any())
+                {
+                    // Log information about existing orders
+                    string orderInfo = $"Found {existingOrders.Count} existing orders for {symbol}:\n";
+                    foreach (var order in existingOrders)
+                    {
+                        orderInfo += $"- Order ID: {order.Id}, Type: {order.Type}, Side: {order.Side}, " +
+                                     $"Quantity: {order.Quantity}, Price: {order.Price}\n";
+                    }
+                    
+                    await ErrorLogger.LogErrorAsync("StrategyService.ManageExistingOrdersAsync", orderInfo);
+                    
+                    // Return true to indicate there are existing orders
+                    return true;
+                }
+                
+                // No existing orders found
+                return false;
+            }
+            catch (Exception ex)
+            {
+                await ErrorLogger.LogErrorAsync("StrategyService.ManageExistingOrdersAsync", 
+                    $"Error managing existing orders: {ex.Message}", ex);
+                return false;
+            }
+        }
         
         /// <summary>
         /// Gets the appropriate risk percentage based on account equity and risk settings

@@ -89,15 +89,39 @@ namespace EthTrader.Services
             decimal trailingOffset,
             CancellationToken ct = default)
         {
-            // Note: Kraken doesn't directly support trailing stops via API
-            // We'll use a stop loss order instead and note that in production
-            // you would need to implement trailing stop logic manually
+            // First, check if there are any existing open orders for this trading pair
+            var openOrdersResult = await _restClient.SpotApi.Trading.GetOpenOrdersAsync(ct: ct);
+            if (!openOrdersResult.Success)
+            {
+                return new WebCallResult<KrakenPlacedOrder>(
+                    new ServerError(openOrdersResult.Error?.Code ?? 0, openOrdersResult.Error?.Message ?? "Failed to fetch open orders")
+                );
+            }
+
+            // Check if there's already a stop loss order for this trading pair
+            var existingStopOrders = openOrdersResult.Data
+                .Where(o => o.Symbol == tradingPair && 
+                           (o.Type == OrderType.StopLoss || o.Type == OrderType.Stop))
+                .ToList();
+
+            if (existingStopOrders.Any())
+            {
+                // Cancel existing stop orders before placing a new one
+                foreach (var order in existingStopOrders)
+                {
+                    await _restClient.SpotApi.Trading.CancelOrderAsync(order.Id, ct: ct);
+                    await Task.Delay(500); // Small delay to ensure order is cancelled
+                }
+                
+                // Log that we're replacing existing orders
+                await ErrorLogger.LogErrorAsync("KrakenService", 
+                    $"Cancelled {existingStopOrders.Count} existing stop orders before placing new trailing stop");
+            }
 
             // Get current price
             var tickerResult = await _restClient.SpotApi.ExchangeData.GetTickerAsync(tradingPair, ct);
             if (!tickerResult.Success || tickerResult.Data.Count == 0)
             {
-                // Use the constructor that just takes an error
                 return new WebCallResult<KrakenPlacedOrder>(
                     new ServerError(tickerResult.Error?.Code ?? 0, tickerResult.Error?.Message ?? "No ticker data available")
                 );
@@ -115,6 +139,14 @@ namespace EthTrader.Services
                 quantity: quantity,
                 price: stopPrice,
                 ct: ct);
+        }
+
+        /// <summary>
+        /// Gets all open orders for the account
+        /// </summary>
+        public async Task<WebCallResult<IEnumerable<KrakenOpenOrder>>> GetOpenOrdersAsync(CancellationToken ct = default)
+        {
+            return await _restClient.SpotApi.Trading.GetOpenOrdersAsync(ct: ct);
         }
     }
 }
