@@ -69,9 +69,32 @@ namespace KrakenTelegramBot.Services
             Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA({_botSettings.SmaPeriod}): {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
             Console.WriteLine(isDowntrend ? "Downtrend detected." : "Uptrend detected.");
 
+            // Get volume data for confirmation
+            var volumes = klinesResult.Data.Select(k => k.Volume).ToList();
+            var volumeMA = IndicatorUtils.CalculateVolumeMA(volumes, _botSettings.VolumeAvgPeriod);
+            
+            // Check if current volume is above average (indicating stronger move)
+            bool volumeConfirmation = false;
+            if (volumeMA.Any())
+            {
+                decimal currentVolume = volumes.Last();
+                decimal avgVolume = volumeMA.Last();
+                volumeConfirmation = currentVolume >= avgVolume * _botSettings.MinVolumeMultiplier;
+            }
+            
+            // Get high and low prices for ATR calculation
+            var highs = klinesResult.Data.Select(k => k.HighPrice).ToList();
+            var lows = klinesResult.Data.Select(k => k.LowPrice).ToList();
+            
+            // Calculate ATR for volatility-based position sizing
+            var atrValues = IndicatorUtils.CalculateAtr(highs, lows, closes, _botSettings.AtrPeriod);
+            decimal currentAtr = atrValues.Any() ? atrValues.Last() : currentPrice * 0.02m; // Default to 2% if can't calculate
+            
             // Decide to trade if conditions are met:
-            // Adaptive threshold and MACD confirmation.
-            if (latestRsi < adaptiveThreshold && latestHistogram > 0)
+            // 1. RSI below adaptive threshold
+            // 2. MACD histogram positive
+            // 3. Volume confirmation
+            if (latestRsi < adaptiveThreshold && latestHistogram > 0 && volumeConfirmation)
             {
                 // Fetch current equity from Kraken
                 var balancesResult = await _krakenService.GetBalancesAsync(ct);
@@ -91,9 +114,23 @@ namespace KrakenTelegramBot.Services
                 // Get risk percentage based on account size
                 decimal riskPercentage = GetRiskPercentageFromSettings(currentEquity);
                 
-                // Calculate position size based on risk
+                // Calculate position size based on risk and volatility
+                decimal riskAmount = currentEquity * riskPercentage;
+                
+                // Adjust risk based on volatility (ATR)
+                decimal volatilityRatio = currentAtr / currentPrice;
+                decimal adjustedRisk = riskPercentage;
+                
+                // If market is more volatile than usual, reduce position size
+                if (volatilityRatio > _botSettings.MaxVolatilityRisk)
+                {
+                    adjustedRisk = riskPercentage * (_botSettings.MaxVolatilityRisk / volatilityRatio);
+                    await _telegramService.SendNotificationAsync(
+                        $"High volatility detected ({volatilityRatio:P2}). Reducing risk from {riskPercentage:P2} to {adjustedRisk:P2}");
+                }
+                
                 decimal quantityToBuy = RiskManagementUtils.CalculatePositionSize(
-                    currentEquity, currentPrice, riskPercentage, _botSettings.StopLossPercentage);
+                    currentEquity, currentPrice, adjustedRisk, _botSettings.StopLossPercentage);
                 
                 // Calculate the EUR value of the order
                 decimal orderValueEur = quantityToBuy * currentPrice;
@@ -119,12 +156,26 @@ namespace KrakenTelegramBot.Services
                 }
 
                 string orderMessage = $"Conditions met:\nRSI: {latestRsi:F2} (< {adaptiveThreshold}), MACD Histogram: {latestHistogram:F2}.\n" +
-                    $"Equity: {currentEquity} EUR, Risk: {riskPercentage:P0}.\n" +
+                    $"Volume confirmation: Current volume is {volumes.Last():F2} (vs avg {volumeMA.Last():F2}).\n" +
+                    $"Equity: {currentEquity} EUR, Risk: {adjustedRisk:P0}, Volatility: {volatilityRatio:P2}.\n" +
                     $"Calculated to buy {quantityToBuy:F6} ETH at {currentPrice:F2} EUR (Total: {orderValueEur:F2} EUR).";
 
                 var orderResult = await _krakenService.PlaceMarketBuyOrderAsync(_botSettings.TradingPair, quantityToBuy, ct);
                 if (orderResult.Success)
                 {
+                    // Log the trade
+                    await TradeTracking.LogTradeAsync(new TradeRecord
+                    {
+                        OrderId = orderResult.Data.OrderId,
+                        Timestamp = DateTime.UtcNow,
+                        Symbol = _botSettings.TradingPair,
+                        Quantity = quantityToBuy,
+                        Price = currentPrice,
+                        Side = "Buy",
+                        Type = "Entry",
+                        RemainingPosition = quantityToBuy
+                    });
+                    
                     orderMessage += "\nBuy order executed successfully.";
                     // Calculate the stop-loss price and place a stop-loss order
                     decimal stopPrice = currentPrice * (1 - _botSettings.StopLossPercentage);
@@ -143,7 +194,9 @@ namespace KrakenTelegramBot.Services
             }
             else
             {
-                string holdMessage = $"No trade: Latest RSI is {latestRsi:F2} (adaptive threshold: {adaptiveThreshold}), or MACD histogram is not positive (latest: {latestHistogram:F2}).";
+                string holdMessage = $"No trade: Latest RSI is {latestRsi:F2} (adaptive threshold: {adaptiveThreshold}), " +
+                    $"MACD histogram is {latestHistogram:F2}, " +
+                    $"Volume confirmation: {(volumeConfirmation ? "Yes" : "No")}";
                 Console.WriteLine(holdMessage);
                 await _telegramService.SendNotificationAsync(holdMessage);
             }
@@ -186,43 +239,114 @@ namespace KrakenTelegramBot.Services
             var macdResult = IndicatorUtils.CalculateMacd(closes);
             decimal latestHistogram = macdResult.Histogram.Last();
 
-            // Get entry price (if available) or estimate it
-            decimal entryPrice = await GetEstimatedEntryPriceAsync(ct) ?? currentPrice * 0.9m; // Assume 10% profit if unknown
+            // Get entry price from trade history
+            decimal? storedEntryPrice = await TradeTracking.GetEstimatedEntryPriceAsync(_botSettings.TradingPair);
+            decimal entryPrice = storedEntryPrice ?? currentPrice * 0.9m; // Assume 10% profit if unknown
             decimal currentProfit = (currentPrice - entryPrice) / entryPrice;
 
-            // Check sell conditions
+            // Check for partial profit taking opportunities
             bool shouldSell = false;
             string sellReason = "";
+            decimal quantityToSell = 0;
+            string exitType = "";
 
-            // 1. Take profit at overbought RSI
-            if (latestRsi > 70)
+            // 1. First profit target (sell 30% of position)
+            if (currentProfit >= _botSettings.FirstProfitTarget && 
+                currentProfit < _botSettings.SecondProfitTarget)
+            {
+                // Check if we've already taken partial profits at this level
+                decimal currentPosition = await TradeTracking.GetCurrentPositionSizeAsync(_botSettings.TradingPair);
+                if (currentPosition >= ethBalance * 0.99m) // No partial exits yet
+                {
+                    shouldSell = true;
+                    sellReason = $"First profit target reached: {currentProfit:P2}";
+                    quantityToSell = ethBalance * _botSettings.FirstSellPercentage;
+                    exitType = "PartialExit";
+                }
+            }
+            // 2. Second profit target (sell 40% of original position)
+            else if (currentProfit >= _botSettings.SecondProfitTarget && 
+                     currentProfit < _botSettings.FinalProfitTarget)
+            {
+                decimal currentPosition = await TradeTracking.GetCurrentPositionSizeAsync(_botSettings.TradingPair);
+                if (currentPosition >= ethBalance * 0.75m) // Only first partial exit taken
+                {
+                    shouldSell = true;
+                    sellReason = $"Second profit target reached: {currentProfit:P2}";
+                    quantityToSell = ethBalance * _botSettings.SecondSellPercentage;
+                    exitType = "PartialExit";
+                }
+            }
+            // 3. Final profit target (sell remaining position)
+            else if (currentProfit >= _botSettings.FinalProfitTarget)
+            {
+                shouldSell = true;
+                sellReason = $"Final profit target reached: {currentProfit:P2}";
+                quantityToSell = ethBalance; // Sell all remaining
+                exitType = "FinalExit";
+            }
+            // 4. Take profit at overbought RSI
+            else if (latestRsi > 70)
             {
                 shouldSell = true;
                 sellReason = $"RSI overbought at {latestRsi:F2}";
+                quantityToSell = ethBalance; // Sell all
+                exitType = "FinalExit";
             }
-            // 2. Take profit at target percentage
-            else if (currentProfit >= 0.15m) // 15% profit target
-            {
-                shouldSell = true;
-                sellReason = $"Profit target reached: {currentProfit:P2}";
-            }
-            // 3. MACD bearish crossover while in profit
-            else if (latestHistogram < 0 && macdResult.Histogram.Skip(macdResult.Histogram.Count - 2).First() > 0 && currentProfit > 0.05m)
+            // 5. MACD bearish crossover while in profit
+            else if (latestHistogram < 0 && 
+                     macdResult.Histogram.Skip(macdResult.Histogram.Count - 2).First() > 0 && 
+                     currentProfit > 0.05m)
             {
                 shouldSell = true;
                 sellReason = $"MACD bearish crossover while in profit: {currentProfit:P2}";
+                quantityToSell = ethBalance; // Sell all
+                exitType = "FinalExit";
             }
-            // 4. Trend reversal (price below SMA) while in good profit
+            // 6. Trend reversal (price below SMA) while in good profit
             else if (currentPrice < sma && currentProfit > 0.08m)
             {
                 shouldSell = true;
                 sellReason = $"Trend reversal while in profit: {currentProfit:P2}";
+                quantityToSell = ethBalance; // Sell all
+                exitType = "FinalExit";
             }
 
-            if (shouldSell)
+            // Check if we should set up a trailing stop instead of selling
+            if (!shouldSell && currentProfit >= _botSettings.TrailingStopActivationProfit)
             {
-                // Determine how much to sell (all ETH in this case)
-                decimal quantityToSell = ethBalance;
+                // Set up trailing stop for remaining position
+                decimal trailingStopOffset = currentPrice * _botSettings.TrailingStopPercentage;
+                
+                string trailingStopMessage = $"Setting trailing stop: Current profit {currentProfit:P2} exceeds activation threshold.\n" +
+                    $"Current price: {currentPrice:F2} EUR, Trailing offset: {trailingStopOffset:F2} EUR";
+                
+                await _telegramService.SendNotificationAsync(trailingStopMessage);
+                
+                var trailingStopResult = await _krakenService.PlaceTrailingStopOrderAsync(
+                    _botSettings.TradingPair, ethBalance, _botSettings.TrailingStopPercentage, ct);
+                
+                if (trailingStopResult.Success)
+                {
+                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.OrderId}");
+                }
+                else
+                {
+                    await _telegramService.SendNotificationAsync($"Error setting trailing stop: {trailingStopResult.Error}");
+                }
+            }
+
+            if (shouldSell && quantityToSell > 0)
+            {
+                // Ensure we're not trying to sell more than we have
+                quantityToSell = Math.Min(quantityToSell, ethBalance);
+                
+                // Ensure minimum order size
+                if (quantityToSell < 0.002m)
+                {
+                    quantityToSell = ethBalance; // If remaining amount is too small, sell all
+                    exitType = "FinalExit";
+                }
                 
                 string sellMessage = $"Sell signal: {sellReason}\n" +
                     $"Current price: {currentPrice:F2} EUR, Entry price: {entryPrice:F2} EUR\n" +
@@ -235,6 +359,19 @@ namespace KrakenTelegramBot.Services
                 
                 if (sellResult.Success)
                 {
+                    // Log the trade
+                    await TradeTracking.LogTradeAsync(new TradeRecord
+                    {
+                        OrderId = sellResult.Data.OrderId,
+                        Timestamp = DateTime.UtcNow,
+                        Symbol = _botSettings.TradingPair,
+                        Quantity = quantityToSell,
+                        Price = currentPrice,
+                        Side = "Sell",
+                        Type = exitType,
+                        RemainingPosition = ethBalance - quantityToSell
+                    });
+                    
                     await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.OrderId}");
                 }
                 else
@@ -244,19 +381,6 @@ namespace KrakenTelegramBot.Services
             }
         }
         
-        /// <summary>
-        /// Gets the estimated entry price for the current ETH position
-        /// </summary>
-        private async Task<decimal?> GetEstimatedEntryPriceAsync(CancellationToken ct)
-        {
-            // In a real implementation, you would:
-            // 1. Query your trade history from Kraken
-            // 2. Find the most recent buy orders for ETH
-            // 3. Calculate the weighted average entry price
-            
-            // For now, we'll return null (unknown entry price)
-            return null;
-        }
         
         /// <summary>
         /// Gets the appropriate risk percentage based on account equity and risk settings
