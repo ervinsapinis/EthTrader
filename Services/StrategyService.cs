@@ -53,7 +53,7 @@ namespace KrakenTelegramBot.Services
         /// <summary>
         /// Gets historical data for the configured trading pair
         /// </summary>
-        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate)
+        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate, CancellationToken)
         {
             try
             {
