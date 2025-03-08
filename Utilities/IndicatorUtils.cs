@@ -1,4 +1,8 @@
-﻿namespace KrakenTelegramBot.Utils
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace KrakenTelegramBot.Utils
 {
     public static class IndicatorUtils
     {
@@ -98,6 +102,79 @@
             }
 
             return (macdLine, signalLine, histogram);
+        }
+        
+        /// <summary>
+        /// Calculates the Average True Range (ATR) indicator
+        /// </summary>
+        /// <param name="highs">List of high prices</param>
+        /// <param name="lows">List of low prices</param>
+        /// <param name="closes">List of close prices</param>
+        /// <param name="period">ATR period</param>
+        /// <returns>List of ATR values</returns>
+        public static List<decimal> CalculateAtr(List<decimal> highs, List<decimal> lows, List<decimal> closes, int period)
+        {
+            if (highs.Count != lows.Count || highs.Count != closes.Count || highs.Count < period + 1)
+                return new List<decimal>();
+
+            var trueRanges = new List<decimal>();
+            
+            // Calculate True Range for each candle
+            for (int i = 1; i < highs.Count; i++)
+            {
+                decimal previousClose = closes[i - 1];
+                decimal tr1 = highs[i] - lows[i]; // Current high - current low
+                decimal tr2 = Math.Abs(highs[i] - previousClose); // Current high - previous close
+                decimal tr3 = Math.Abs(lows[i] - previousClose); // Current low - previous close
+                
+                decimal trueRange = Math.Max(tr1, Math.Max(tr2, tr3));
+                trueRanges.Add(trueRange);
+            }
+            
+            // Calculate ATR using simple moving average of true ranges
+            var atrValues = new List<decimal>();
+            
+            // First ATR is simple average of first 'period' true ranges
+            if (trueRanges.Count >= period)
+            {
+                decimal firstAtr = trueRanges.Take(period).Average();
+                atrValues.Add(firstAtr);
+                
+                // Subsequent ATRs use the smoothing formula: ATR = ((Prior ATR * (period-1)) + Current TR) / period
+                for (int i = period; i < trueRanges.Count; i++)
+                {
+                    decimal currentAtr = ((atrValues.Last() * (period - 1)) + trueRanges[i]) / period;
+                    atrValues.Add(currentAtr);
+                }
+            }
+            
+            return atrValues;
+        }
+        
+        /// <summary>
+        /// Calculates the volume moving average
+        /// </summary>
+        /// <param name="volumes">List of volume values</param>
+        /// <param name="period">Moving average period</param>
+        /// <returns>List of volume moving average values</returns>
+        public static List<decimal> CalculateVolumeMA(List<decimal> volumes, int period)
+        {
+            if (volumes.Count < period)
+                return new List<decimal>();
+                
+            var volumeMA = new List<decimal>();
+            
+            for (int i = period - 1; i < volumes.Count; i++)
+            {
+                decimal sum = 0;
+                for (int j = i - (period - 1); j <= i; j++)
+                {
+                    sum += volumes[j];
+                }
+                volumeMA.Add(sum / period);
+            }
+            
+            return volumeMA;
         }
     }
 }
