@@ -14,7 +14,12 @@ namespace KrakenTelegramBot
             var strategyService = new StrategyService(krakenService, telegramService);
 
             // Execute the trading strategy
-            await strategyService.ExecuteStrategyAsync();
+            while (true)
+            {
+                await strategyService.ExecuteStrategyAsync();
+                // Wait for a specified interval before checking again (e.g., 1 hour)
+                await Task.Delay(TimeSpan.FromMinutes(30));
+            }
 
             Console.WriteLine("Press any key to exit.");
             Console.ReadKey();
