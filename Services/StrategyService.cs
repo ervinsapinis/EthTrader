@@ -49,13 +49,12 @@ namespace KrakenTelegramBot.Services
         }
         
         /// <summary>
-        /// Runs a backtest of the strategy on historical data
+        /// Gets historical data for the configured trading pair
         /// </summary>
-        public async Task<BacktestResult> RunBacktestAsync(DateTime startDate, DateTime endDate, decimal initialCapital = 1000m)
+        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate)
         {
             try
             {
-                // Fetch historical data
                 var klinesResult = await _krakenService.ExchangeData.GetKlinesAsync(
                     _botSettings.TradingPair, Interval, startDate, endDate);
                 
@@ -64,9 +63,28 @@ namespace KrakenTelegramBot.Services
                     throw new Exception($"Failed to fetch historical data: {klinesResult.Error}");
                 }
                 
+                return klinesResult.Data.ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error fetching historical data: {ex.Message}");
+                throw;
+            }
+        }
+        
+        /// <summary>
+        /// Runs a backtest of the strategy on historical data
+        /// </summary>
+        public async Task<BacktestResult> RunBacktestAsync(DateTime startDate, DateTime endDate, decimal initialCapital = 1000m)
+        {
+            try
+            {
+                // Fetch historical data
+                var historicalData = await GetHistoricalDataAsync(startDate, endDate);
+                
                 // Run backtest
                 var engine = new BacktestEngine(_botSettings, _riskSettings, initialCapital);
-                var result = await engine.RunBacktestAsync(klinesResult.Data.ToList());
+                var result = await engine.RunBacktestAsync(historicalData);
                 
                 // Log results
                 Console.WriteLine(result.ToString());

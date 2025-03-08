@@ -66,10 +66,38 @@ namespace KrakenTelegramBot
                     await ShowDashboard(telegramService);
                 });
                 
+                // Add optimize command
+                var optimizeCommand = new Command("optimize", "Optimize strategy parameters using historical data");
+                
+                var optimizeStartOption = new Option<DateTime>(
+                    "--start",
+                    "Start date for optimization (yyyy-MM-dd)");
+                optimizeStartOption.IsRequired = true;
+                
+                var optimizeEndOption = new Option<DateTime>(
+                    "--end",
+                    "End date for optimization (yyyy-MM-dd)");
+                optimizeEndOption.IsRequired = true;
+                
+                var optimizeCapitalOption = new Option<decimal>(
+                    "--capital",
+                    () => 1000m,
+                    "Initial capital for optimization in EUR");
+                
+                optimizeCommand.AddOption(optimizeStartOption);
+                optimizeCommand.AddOption(optimizeEndOption);
+                optimizeCommand.AddOption(optimizeCapitalOption);
+                
+                optimizeCommand.SetHandler(async (DateTime start, DateTime end, decimal capital) =>
+                {
+                    await OptimizeParameters(strategyService, telegramService, start, end, capital);
+                }, optimizeStartOption, optimizeEndOption, optimizeCapitalOption);
+                
                 // Add commands to root
                 rootCommand.AddCommand(runCommand);
                 rootCommand.AddCommand(backtestCommand);
                 rootCommand.AddCommand(dashboardCommand);
+                rootCommand.AddCommand(optimizeCommand);
                 
                 // If no args, default to run
                 if (args.Length == 0)
@@ -183,6 +211,53 @@ namespace KrakenTelegramBot
             catch (Exception ex)
             {
                 Console.WriteLine($"Error showing dashboard: {ex.Message}");
+            }
+        }
+        
+        private static async Task OptimizeParameters(
+            StrategyService strategyService,
+            TelegramService telegramService,
+            DateTime startDate,
+            DateTime endDate,
+            decimal initialCapital)
+        {
+            Console.WriteLine($"Starting parameter optimization from {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+            await telegramService.SendNotificationAsync(
+                $"Starting parameter optimization: {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+            
+            try
+            {
+                // Fetch historical data
+                var klinesResult = await strategyService.GetHistoricalDataAsync(startDate, endDate);
+                
+                if (klinesResult == null || !klinesResult.Any())
+                {
+                    throw new Exception("Failed to fetch historical data for optimization");
+                }
+                
+                // Run optimization
+                var optimizer = new ParameterOptimizer(
+                    klinesResult, 
+                    initialCapital, 
+                    ConfigLoader.RiskSettings);
+                    
+                var result = await optimizer.OptimizeParametersAsync();
+                
+                // Display results
+                Console.WriteLine("\nOptimization completed successfully!");
+                Console.WriteLine(result.ToString());
+                
+                // Send results to Telegram
+                await telegramService.SendNotificationAsync(
+                    $"Parameter optimization completed!\n\n{result}");
+                
+                // Suggest applying the optimized parameters
+                Console.WriteLine("\nTo apply these optimized parameters, update your appsettings.json file with these values.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Optimization failed: {ex.Message}");
+                await telegramService.SendNotificationAsync($"Optimization failed: {ex.Message}");
             }
         }
     }
