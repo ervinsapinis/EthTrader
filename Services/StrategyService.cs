@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Kraken.Net.Enums;
 using KrakenTelegramBot.Extensions;
 using KrakenTelegramBot.Utils;
+using EthTrader.Configuration;
 
 namespace KrakenTelegramBot.Services
 {
@@ -12,30 +13,25 @@ namespace KrakenTelegramBot.Services
     {
         private readonly KrakenService _krakenService;
         private readonly TelegramService _telegramService;
+        private readonly BotSettings _botSettings;
+        private readonly RiskSettings _riskSettings;
         private const KlineInterval Interval = KlineInterval.OneHour;
 
-
-
-        // Remove hard-coded constants; we'll use configuration.
-        // For dynamic risk sizing, we'll still get the current equity from Kraken.
-        // For now, we'll simulate equity if necessary.
-        private const decimal SimulatedEquity = 500m; // For testing only.
-
-        public StrategyService(KrakenService krakenService, TelegramService telegramService)
+        public StrategyService(
+            KrakenService krakenService, 
+            TelegramService telegramService)
         {
             _krakenService = krakenService;
             _telegramService = telegramService;
+            _botSettings = ConfigLoader.BotSettings;
+            _riskSettings = ConfigLoader.RiskSettings;
         }
 
         public async Task ExecuteStrategyAsync(CancellationToken ct = default)
         {   
-            // Load settings from configuration
-            var botSettings = Config.BotSettings;
-            var riskSettings = Config.RiskSettings;
-
             // Retrieve klines using configured count
             var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(
-                botSettings.TradingPair, Interval, botSettings.KlineCount, ct);
+                _botSettings.TradingPair, Interval, _botSettings.KlineCount, ct);
             if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
             {
                 await _telegramService.SendNotificationAsync("Error fetching klines: " + klinesResult.Error);
@@ -46,7 +42,7 @@ namespace KrakenTelegramBot.Services
             var closes = klinesResult.Data.Select(k => k.ClosePrice).ToList();
 
             // Calculate RSI using configuration
-            var rsiValues = IndicatorUtils.CalculateRsi(closes, botSettings.RsiPeriod);
+            var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
             if (!rsiValues.Any())
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate RSI.");
@@ -55,23 +51,23 @@ namespace KrakenTelegramBot.Services
             var latestRsi = rsiValues.Last();
 
             // Calculate SMA for trend awareness
-            decimal sma = IndicatorUtils.CalculateSma(closes, botSettings.SmaPeriod);
+            decimal sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
             decimal currentPrice = closes.Last();
             bool isDowntrend = currentPrice < sma;
-            decimal adaptiveThreshold = isDowntrend ? botSettings.DowntrendOversoldThreshold : botSettings.DefaultOversoldThreshold;
+            decimal adaptiveThreshold = isDowntrend ? _botSettings.DowntrendOversoldThreshold : _botSettings.DefaultOversoldThreshold;
 
             // Calculate MACD for additional confirmation (optional)
             var macdResult = IndicatorUtils.CalculateMacd(closes);
             decimal latestHistogram = macdResult.Histogram.Last();
 
-            Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA({botSettings.SmaPeriod}): {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
+            Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA({_botSettings.SmaPeriod}): {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
             Console.WriteLine(isDowntrend ? "Downtrend detected." : "Uptrend detected.");
 
             // Decide to trade if conditions are met:
             // Adaptive threshold and MACD confirmation.
             if (latestRsi < adaptiveThreshold && latestHistogram > 0)
             {
-                // Fetch current equity from Kraken; here we simulate it.
+                // Fetch current equity from Kraken
                 var balancesResult = await _krakenService.GetBalancesAsync(ct);
                 if (!balancesResult.Success)
                 {
@@ -79,20 +75,54 @@ namespace KrakenTelegramBot.Services
                     return;
                 }
 
-                // Assume that the EUR balance is under "ZEUR" (Kraken may use different naming)
-                decimal currentEquity = balancesResult.Data.ContainsKey("ZEUR") ? balancesResult.Data["ZEUR"] : SimulatedEquity;
-                decimal riskPercentage = RiskManagementUtils.GetRiskPercentage(currentEquity);
-                decimal quantityToBuy = RiskManagementUtils.CalculatePositionSize(currentEquity, currentPrice, riskPercentage, botSettings.StopLossPercentage);
+                // Assume that the EUR balance is under "ZEUR" (Kraken naming)
+                if (!balancesResult.Data.TryGetValue("ZEUR", out decimal currentEquity) || currentEquity <= 0)
+                {
+                    await _telegramService.SendNotificationAsync("Insufficient EUR balance or unable to retrieve balance.");
+                    return;
+                }
 
-                string orderMessage = $"Conditions met:\nRSI: {latestRsi:F2} (< {adaptiveThreshold}), MACD Histogram: {latestHistogram:F2}.\nEquity: {currentEquity} EUR, Risk: {riskPercentage:P0}.\nCalculated to buy {quantityToBuy:F6} ETH at {currentPrice:F2} EUR.";
+                // Get risk percentage based on account size
+                decimal riskPercentage = GetRiskPercentageFromSettings(currentEquity);
+                
+                // Calculate position size based on risk
+                decimal quantityToBuy = RiskManagementUtils.CalculatePositionSize(
+                    currentEquity, currentPrice, riskPercentage, _botSettings.StopLossPercentage);
+                
+                // Calculate the EUR value of the order
+                decimal orderValueEur = quantityToBuy * currentPrice;
+                
+                // Check if we have enough balance and adjust if needed
+                if (orderValueEur > currentEquity)
+                {
+                    // Adjust to use available balance (with small buffer for fees)
+                    decimal adjustmentFactor = (currentEquity * 0.995m) / orderValueEur;
+                    quantityToBuy *= adjustmentFactor;
+                    orderValueEur = quantityToBuy * currentPrice;
+                    
+                    await _telegramService.SendNotificationAsync(
+                        $"Warning: Order size adjusted to match available balance. Original: {orderValueEur / adjustmentFactor:F2} EUR, Adjusted: {orderValueEur:F2} EUR");
+                }
+                
+                // Ensure minimum order size (Kraken typically requires orders > 0.002 ETH)
+                if (quantityToBuy < 0.002m)
+                {
+                    await _telegramService.SendNotificationAsync(
+                        $"Calculated position size ({quantityToBuy:F6} ETH) is below minimum order size. No order placed.");
+                    return;
+                }
 
-                var orderResult = await _krakenService.PlaceMarketBuyOrderAsync(botSettings.TradingPair, quantityToBuy, ct);
+                string orderMessage = $"Conditions met:\nRSI: {latestRsi:F2} (< {adaptiveThreshold}), MACD Histogram: {latestHistogram:F2}.\n" +
+                    $"Equity: {currentEquity} EUR, Risk: {riskPercentage:P0}.\n" +
+                    $"Calculated to buy {quantityToBuy:F6} ETH at {currentPrice:F2} EUR (Total: {orderValueEur:F2} EUR).";
+
+                var orderResult = await _krakenService.PlaceMarketBuyOrderAsync(_botSettings.TradingPair, quantityToBuy, ct);
                 if (orderResult.Success)
                 {
                     orderMessage += "\nBuy order executed successfully.";
                     // Calculate the stop-loss price and place a stop-loss order
-                    decimal stopPrice = currentPrice * (1 - botSettings.StopLossPercentage);
-                    var stopLossResult = await _krakenService.PlaceStopLossOrderAsync(botSettings.TradingPair, quantityToBuy, stopPrice, ct);
+                    decimal stopPrice = currentPrice * (1 - _botSettings.StopLossPercentage);
+                    var stopLossResult = await _krakenService.PlaceStopLossOrderAsync(_botSettings.TradingPair, quantityToBuy, stopPrice, ct);
                     if (stopLossResult.Success)
                         orderMessage += $"\nStop-loss order placed at {stopPrice:F2} EUR.";
                     else
@@ -111,6 +141,25 @@ namespace KrakenTelegramBot.Services
                 Console.WriteLine(holdMessage);
                 await _telegramService.SendNotificationAsync(holdMessage);
             }
+        }
+        
+        /// <summary>
+        /// Gets the appropriate risk percentage based on account equity and risk settings
+        /// </summary>
+        private decimal GetRiskPercentageFromSettings(decimal equity)
+        {
+            if (equity < 150)
+                return _riskSettings.Tier1;
+            else if (equity < 350)
+                return _riskSettings.Tier2;
+            else if (equity < 500)
+                return _riskSettings.Tier3;
+            else if (equity < 800)
+                return _riskSettings.Tier4;
+            else if (equity < 1500)
+                return _riskSettings.Tier5;
+            else
+                return _riskSettings.TierAbove;
         }
     }
 }

@@ -24,24 +24,15 @@ namespace KrakenTelegramBot.Utils
         }
 
         /// <summary>
-        /// Determines the risk percentage based on current equity.
+        /// Calculates the maximum position size based on available equity
         /// </summary>
-        /// <param name="equity">Current account equity in EUR.</param>
-        /// <returns>Risk percentage as a decimal.</returns>
-        public static decimal GetRiskPercentage(decimal equity)
+        /// <param name="availableEquity">Available equity in EUR</param>
+        /// <param name="currentPrice">Current asset price in EUR</param>
+        /// <returns>Maximum position size in asset units</returns>
+        public static decimal CalculateMaxPositionSize(decimal availableEquity, decimal currentPrice)
         {
-            if (equity < 150)
-                return 0.10m;   // 10% risk if equity is less than 150 EUR.
-            else if (equity < 350)
-                return 0.075m;  // 7.5%
-            else if (equity < 500)
-                return 0.05m;   // 5%
-            else if (equity < 800)
-                return 0.025m;  // 2.5%
-            else if (equity < 1500)
-                return 0.015m;  // 1.5%
-            else
-                return 0.01m;   // 1% for larger accounts.
+            // Allow for some buffer (0.5%) for fees
+            return (availableEquity * 0.995m) / currentPrice;
         }
     }
 }
