@@ -97,8 +97,15 @@ namespace EthTrader.Services
             {
                 return new WebCallResult<KrakenPlacedOrder>(
                     tickerResult.ResponseStatusCode,
-                    tickerResult.Error ?? new CryptoExchange.Net.Objects.Error("No ticker data available"),
-                    null);
+                    null,
+                    tickerResult.Error ?? new CryptoExchange.Net.Objects.ServerError("No ticker data available"),
+                    null,
+                    null,
+                    null,
+                    null,
+                    CryptoExchange.Net.Objects.ResultDataSource.Rest,
+                    null,
+                    0);
             }
             
             decimal currentPrice = tickerResult.Data.First().Value.LastTrade.Price;
