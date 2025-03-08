@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using EthTrader.Services;
 using EthTrader.Utils;
 using EthTrader.Configuration;
+using EthTrader.Utilities;
 
 namespace EthTrader
 {

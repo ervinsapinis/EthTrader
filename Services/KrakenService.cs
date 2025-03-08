@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Kraken.Net.Clients;
@@ -9,6 +10,7 @@ using CryptoExchange.Net.Authentication;
 using Kraken.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
 using Kraken.Net.Interfaces.Clients.SpotApi;
+using EthTrader.Utilities;
 
 namespace EthTrader.Services
 {

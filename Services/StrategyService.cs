@@ -8,6 +8,7 @@ using Kraken.Net.Objects.Models;
 using EthTrader.Extensions;
 using KrakenTelegramBot.Utils;
 using EthTrader.Configuration;
+using EthTrader.Utilities;
 
 namespace EthTrader.Services
 {
