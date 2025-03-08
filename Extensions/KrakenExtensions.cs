@@ -6,7 +6,7 @@ using Kraken.Net.Interfaces.Clients.SpotApi;
 using Kraken.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
 
-namespace KrakenTelegramBot.Extensions
+namespace EthTrader.Extensions
 {
     public static class KrakenExtensions
     {

@@ -10,7 +10,7 @@ using Kraken.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
 using Kraken.Net.Interfaces.Clients.SpotApi;
 
-namespace KrakenTelegramBot.Services
+namespace EthTrader.Services
 {
     public class KrakenService
     {

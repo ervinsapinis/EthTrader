@@ -5,11 +5,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Kraken.Net.Enums;
 using Kraken.Net.Objects.Models;
-using KrakenTelegramBot.Extensions;
+using EthTrader.Extensions;
 using KrakenTelegramBot.Utils;
 using EthTrader.Configuration;
 
-namespace KrakenTelegramBot.Services
+namespace EthTrader.Services
 {
     public class StrategyService
     {
@@ -53,7 +53,7 @@ namespace KrakenTelegramBot.Services
         /// <summary>
         /// Gets historical data for the configured trading pair
         /// </summary>
-        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate, CancellationToken)
+        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate, CancellationToken ct = default)
         {
             try
             {
@@ -82,7 +82,7 @@ namespace KrakenTelegramBot.Services
             try
             {
                 // Fetch historical data
-                var historicalData = await GetHistoricalDataAsync(startDate, endDate);
+                var historicalData = await GetHistoricalDataAsync(startDate, endDate, default);
                 
                 // Run backtest
                 var engine = new BacktestEngine(_botSettings, _riskSettings, initialCapital);

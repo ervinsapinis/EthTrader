@@ -3,11 +3,11 @@ using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.Threading;
 using System.Threading.Tasks;
-using KrakenTelegramBot.Services;
-using KrakenTelegramBot.Utils;
+using EthTrader.Services;
+using EthTrader.Utils;
 using EthTrader.Configuration;
 
-namespace KrakenTelegramBot
+namespace EthTrader
 {
     class Program
     {

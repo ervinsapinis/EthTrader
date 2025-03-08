@@ -2,7 +2,7 @@
 using System.Threading.Tasks;
 using Telegram.Bot;
 
-namespace KrakenTelegramBot.Services
+namespace EthTrader.Services
 {
     public class TelegramService
     {
@@ -26,7 +26,7 @@ namespace KrakenTelegramBot.Services
         {
             try
             {
-                var sentMessage = await _botClient.SendMessage(_chatId, message);
+                var sentMessage = await _botClient.SendTextMessageAsync(_chatId, message);
                 Console.WriteLine($"Telegram message sent: {sentMessage.Text}");
             }
             catch (Exception ex)
