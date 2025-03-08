@@ -17,6 +17,7 @@ namespace KrakenTelegramBot.Utils
         public string? Side { get; set; } // "Buy" or "Sell"
         public string? Type { get; set; } // "Entry", "PartialExit", "StopLoss", "FinalExit"
         public decimal? RemainingPosition { get; set; }
+        public decimal? ProfitPercentage { get; set; } // Track profit for each trade
     }
 
     public static class TradeTracking
