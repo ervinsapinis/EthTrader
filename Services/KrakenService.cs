@@ -85,14 +85,28 @@ namespace KrakenTelegramBot.Services
             decimal trailingOffset,
             CancellationToken ct = default)
         {
-            // Note: Implementation depends on Kraken API support for trailing stops
-            // This is a simplified example
+            // Note: Kraken doesn't directly support trailing stops via API
+            // We'll use a stop loss order instead and note that in production
+            // you would need to implement trailing stop logic manually
+            
+            // Get current price
+            var tickerResult = await _restClient.SpotApi.ExchangeData.GetTickerAsync(tradingPair, ct);
+            if (!tickerResult.Success)
+            {
+                return WebCallResult<KrakenPlacedOrder>.CreateErrorResult(
+                    tickerResult.ResponseStatusCode,
+                    tickerResult.Error);
+            }
+            
+            decimal currentPrice = tickerResult.Data.First().Value.LastTrade.Price;
+            decimal stopPrice = currentPrice * (1 - trailingOffset);
+            
             return await _restClient.SpotApi.Trading.PlaceOrderAsync(
                 symbol: tradingPair,
                 side: OrderSide.Sell,
-                type: OrderType.TrailingStopMarket,
+                type: OrderType.StopLoss,
                 quantity: quantity,
-                trailingDelta: trailingOffset,
+                price: stopPrice,
                 ct: ct);
         }
 

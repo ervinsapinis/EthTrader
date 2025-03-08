@@ -166,7 +166,7 @@ namespace KrakenTelegramBot.Services
                     // Log the trade
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = orderResult.Data.OrderId,
+                        OrderId = orderResult.Data.Id,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToBuy,
@@ -328,7 +328,7 @@ namespace KrakenTelegramBot.Services
                 
                 if (trailingStopResult.Success)
                 {
-                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.OrderId}");
+                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.Id}");
                 }
                 else
                 {
@@ -362,7 +362,7 @@ namespace KrakenTelegramBot.Services
                     // Log the trade
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = sellResult.Data.OrderId,
+                        OrderId = sellResult.Data.Id,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToSell,
@@ -372,7 +372,7 @@ namespace KrakenTelegramBot.Services
                         RemainingPosition = ethBalance - quantityToSell
                     });
                     
-                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.OrderId}");
+                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.Id}");
                 }
                 else
                 {

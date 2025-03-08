@@ -9,13 +9,13 @@ namespace KrakenTelegramBot.Utils
 {
     public class TradeRecord
     {
-        public string OrderId { get; set; }
+        public string? OrderId { get; set; }
         public DateTime Timestamp { get; set; }
-        public string Symbol { get; set; }
+        public string? Symbol { get; set; }
         public decimal Quantity { get; set; }
         public decimal Price { get; set; }
-        public string Side { get; set; } // "Buy" or "Sell"
-        public string Type { get; set; } // "Entry", "PartialExit", "StopLoss", "FinalExit"
+        public string? Side { get; set; } // "Buy" or "Sell"
+        public string? Type { get; set; } // "Entry", "PartialExit", "StopLoss", "FinalExit"
         public decimal? RemainingPosition { get; set; }
     }
 
