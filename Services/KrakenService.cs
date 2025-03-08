@@ -11,6 +11,8 @@ using Kraken.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
 using Kraken.Net.Interfaces.Clients.SpotApi;
 using EthTrader.Utilities;
+using System.Net;
+using System.Net.Http;
 
 namespace EthTrader.Services
 {
@@ -67,10 +69,10 @@ namespace EthTrader.Services
                 ct: ct
             );
         }
-        
+
         public async Task<WebCallResult<KrakenPlacedOrder>> PlaceMarketSellOrderAsync(
-            string tradingPair, 
-            decimal quantity, 
+            string tradingPair,
+            decimal quantity,
             CancellationToken ct = default)
         {
             return await _restClient.SpotApi.Trading.PlaceOrderAsync(
@@ -80,7 +82,7 @@ namespace EthTrader.Services
                 quantity: quantity,
                 ct: ct);
         }
-        
+
         public async Task<WebCallResult<KrakenPlacedOrder>> PlaceTrailingStopOrderAsync(
             string tradingPair,
             decimal quantity,
@@ -90,27 +92,22 @@ namespace EthTrader.Services
             // Note: Kraken doesn't directly support trailing stops via API
             // We'll use a stop loss order instead and note that in production
             // you would need to implement trailing stop logic manually
-            
+
             // Get current price
             var tickerResult = await _restClient.SpotApi.ExchangeData.GetTickerAsync(tradingPair, ct);
             if (!tickerResult.Success || tickerResult.Data.Count == 0)
             {
+                // Use the constructor that just takes an error
                 return new WebCallResult<KrakenPlacedOrder>(
-                    tickerResult.ResponseStatusCode,
-                    null,
-                    tickerResult.Error ?? new CryptoExchange.Net.Objects.ServerError("No ticker data available"),
-                    null,
-                    null,
-                    null,
-                    null,
-                    CryptoExchange.Net.Objects.ResultDataSource.Rest,
-                    null,
-                    0);
+                    new ServerError(tickerResult.Error?.Code ?? 0, tickerResult.Error?.Message ?? "No ticker data available")
+                );
             }
-            
+
             decimal currentPrice = tickerResult.Data.First().Value.LastTrade.Price;
-            decimal stopPrice = currentPrice * (1 - trailingOffset);
-            
+
+            // Calculate stop price and round to 2 decimal places as required by Kraken
+            decimal stopPrice = Math.Round(currentPrice * (1 - trailingOffset), 2);
+
             return await _restClient.SpotApi.Trading.PlaceOrderAsync(
                 symbol: tradingPair,
                 side: OrderSide.Sell,
@@ -119,6 +116,5 @@ namespace EthTrader.Services
                 price: stopPrice,
                 ct: ct);
         }
-
     }
 }

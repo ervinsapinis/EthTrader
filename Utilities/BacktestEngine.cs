@@ -102,7 +102,7 @@ namespace KrakenTelegramBot.Utils
             }
             
             // Close any remaining position at the end
-            if (_ethPosition > 0 && klines.Any())
+            if (_ethPosition > 0 && klines.Count != 0)
             {
                 ExecuteSell(klines.Last(), klines.Count - 1, "FinalExit");
             }
@@ -134,7 +134,7 @@ namespace KrakenTelegramBot.Utils
             
             // Calculate indicators
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
-            if (!rsiValues.Any()) return false;
+            if (rsiValues.Count == 0) return false;
             
             var latestRsi = rsiValues.Last();
             var sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
@@ -151,7 +151,7 @@ namespace KrakenTelegramBot.Utils
             // Check volume
             var volumeMA = IndicatorUtils.CalculateVolumeMA(volumes, _botSettings.VolumeAvgPeriod);
             bool volumeConfirmation = false;
-            if (volumeMA.Any())
+            if (volumeMA.Count != 0)
             {
                 var currentVolume = volumes.Last();
                 var avgVolume = volumeMA.Last();
@@ -169,7 +169,7 @@ namespace KrakenTelegramBot.Utils
             
             // Calculate indicators
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
-            if (!rsiValues.Any()) return false;
+            if (rsiValues.Count == 0) return false;
             
             var latestRsi = rsiValues.Last();
             var sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
@@ -190,18 +190,18 @@ namespace KrakenTelegramBot.Utils
             
             return false;
         }
-        
+
         private void ExecuteBuy(KrakenKline kline, int index)
         {
             var currentPrice = kline.ClosePrice;
-            
+
             // Get risk percentage based on account size
             var riskPercentage = GetRiskPercentageFromSettings(_capital);
-            
+
             // Calculate position size
             var quantityToBuy = RiskManagementUtils.CalculatePositionSize(
                 _capital, currentPrice, riskPercentage, _botSettings.StopLossPercentage);
-            
+
             // Check if we have enough capital
             var orderValue = quantityToBuy * currentPrice;
             if (orderValue > _capital)
@@ -209,16 +209,16 @@ namespace KrakenTelegramBot.Utils
                 quantityToBuy = (_capital * 0.995m) / currentPrice;
                 orderValue = quantityToBuy * currentPrice;
             }
-            
+
             // Execute trade
             _capital -= orderValue;
             _ethPosition = quantityToBuy;
             _entryPrice = currentPrice;
-            
+
             // Log trade
             _trades.Add(new TradeRecord
             {
-                OrderId = $"BT-{index}",
+                OrderIds = new[] { $"BT-{index}" },  // Changed from OrderId to OrderIds with an array
                 Timestamp = kline.OpenTime,
                 Symbol = _botSettings.TradingPair,
                 Quantity = quantityToBuy,
@@ -228,23 +228,23 @@ namespace KrakenTelegramBot.Utils
                 RemainingPosition = quantityToBuy
             });
         }
-        
+
         private void ExecuteSell(KrakenKline kline, int index, string exitType)
         {
             var currentPrice = kline.ClosePrice;
-            
+
             // Calculate profit
-            var profitPercentage = _entryPrice.HasValue ? 
+            var profitPercentage = _entryPrice.HasValue ?
                 (currentPrice - _entryPrice.Value) / _entryPrice.Value : 0;
-            
+
             // Execute trade
             var orderValue = _ethPosition * currentPrice;
             _capital += orderValue;
-            
+
             // Log trade
             _trades.Add(new TradeRecord
             {
-                OrderId = $"BT-{index}",
+                OrderIds = new[] { $"BT-{index}" },  // Changed from OrderId to OrderIds with an array
                 Timestamp = kline.OpenTime,
                 Symbol = _botSettings.TradingPair,
                 Quantity = _ethPosition,
@@ -254,12 +254,11 @@ namespace KrakenTelegramBot.Utils
                 RemainingPosition = 0,
                 ProfitPercentage = profitPercentage
             });
-            
+
             // Reset position
             _ethPosition = 0;
             _entryPrice = null;
         }
-        
         private void UpdateDrawdown()
         {
             // Calculate current equity

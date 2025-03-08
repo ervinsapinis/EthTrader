@@ -46,7 +46,7 @@ namespace EthTrader.Services
                 await _telegramService.SendNotificationAsync($"Error in strategy execution: {ex.Message}");
             }
         }
-        
+
         /// <summary>
         /// Gets historical data for the configured trading pair
         /// </summary>
@@ -54,15 +54,22 @@ namespace EthTrader.Services
         {
             try
             {
+                // The GetKlinesAsync method only accepts a since parameter, not an end date
+                // Get data since the start date and filter results manually
                 var klinesResult = await _krakenService.ExchangeData.GetKlinesAsync(
-                    _botSettings.TradingPair, Interval, startDate, endDate, ct);
-                
-                if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
+                    _botSettings.TradingPair, Interval, startDate, ct: CancellationToken.None);
+
+                if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Data.Any())
                 {
                     throw new Exception($"Failed to fetch historical data: {klinesResult.Error}");
                 }
-                
-                return klinesResult.Data.ToList();
+
+                // Filter klines to only include those up to the end date
+                var filteredKlines = klinesResult.Data.Data
+                    .Where(k => k.OpenTime <= endDate)
+                    .ToList();
+
+                return filteredKlines;
             }
             catch (Exception ex)
             {
@@ -70,7 +77,7 @@ namespace EthTrader.Services
                 throw;
             }
         }
-        
+
         /// <summary>
         /// Runs a backtest of the strategy on historical data
         /// </summary>
@@ -79,7 +86,7 @@ namespace EthTrader.Services
             try
             {
                 // Fetch historical data
-                var historicalData = await GetHistoricalDataAsync(startDate, endDate, default);
+                var historicalData = await GetHistoricalDataAsync(startDate, endDate);
                 
                 // Run backtest
                 var engine = new BacktestEngine(_botSettings, _riskSettings, initialCapital);
@@ -104,7 +111,7 @@ namespace EthTrader.Services
             // Retrieve klines using configured count
             var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(
                 _botSettings.TradingPair, Interval, _botSettings.KlineCount, ct);
-            if (!klinesResult.Success || klinesResult.Data == null || klinesResult.Data.Count == 0)
+            if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
             {
                 await _telegramService.SendNotificationAsync("Error fetching klines: " + klinesResult.Error);
                 return;
@@ -237,7 +244,7 @@ namespace EthTrader.Services
                     // Log the trade
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = orderResult.Data.OrderId,
+                        OrderIds = orderResult.Data.OrderIds,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToBuy,
@@ -305,7 +312,7 @@ namespace EthTrader.Services
 
             // Calculate indicators
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
-            if (rsiValues == null || !rsiValues.Any())
+            if (rsiValues == null || rsiValues.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate RSI for sell signals.");
                 return;
@@ -406,10 +413,10 @@ namespace EthTrader.Services
                 
                 var trailingStopResult = await _krakenService.PlaceTrailingStopOrderAsync(
                     _botSettings.TradingPair, ethBalance, _botSettings.TrailingStopPercentage, ct);
-                
+
                 if (trailingStopResult.Success)
                 {
-                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.OrderId}");
+                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order IDs: {string.Join(", ", trailingStopResult.Data.OrderIds)}");
                 }
                 else
                 {
@@ -443,7 +450,7 @@ namespace EthTrader.Services
                     // Log the trade with profit information
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = sellResult.Data.OrderId,
+                        OrderIds = sellResult.Data.OrderIds,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToSell,
@@ -454,7 +461,7 @@ namespace EthTrader.Services
                         ProfitPercentage = currentProfit
                     });
                     
-                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.OrderId}");
+                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order IDs: {string.Join(", ", sellResult.Data.OrderIds)}");
                 }
                 else
                 {

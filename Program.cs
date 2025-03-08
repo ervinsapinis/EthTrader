@@ -4,9 +4,9 @@ using System.CommandLine.Invocation;
 using System.Threading;
 using System.Threading.Tasks;
 using EthTrader.Services;
-using EthTrader.Utils;
 using EthTrader.Configuration;
 using EthTrader.Utilities;
+using KrakenTelegramBot.Utils;
 
 namespace EthTrader
 {
