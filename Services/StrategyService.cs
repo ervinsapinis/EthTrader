@@ -12,10 +12,16 @@ using EthTrader.Utilities;
 
 namespace EthTrader.Services
 {
-    public class StrategyService(KrakenService krakenService, TelegramService telegramService)
+    public class StrategyService
     {
-        private readonly KrakenService _krakenService = krakenService;
-        private readonly TelegramService _telegramService = telegramService;
+        private readonly KrakenService _krakenService;
+        private readonly TelegramService _telegramService;
+        
+        public StrategyService(KrakenService krakenService, TelegramService telegramService)
+        {
+            _krakenService = krakenService;
+            _telegramService = telegramService;
+        }
         private readonly BotSettings _botSettings = ConfigLoader.BotSettings;
         private readonly RiskSettings _riskSettings = ConfigLoader.RiskSettings;
         private const KlineInterval Interval = KlineInterval.OneHour;
