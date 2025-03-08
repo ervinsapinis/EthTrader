@@ -9,7 +9,7 @@ namespace KrakenTelegramBot.Utils
 {
     public class TradeRecord
     {
-        public IEnumerable<string> OrderIds { get; set; } = Array.Empty<string>();
+        public string OrderId { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; }
         public string? Symbol { get; set; }
         public decimal Quantity { get; set; }
