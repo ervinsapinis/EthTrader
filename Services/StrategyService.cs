@@ -45,7 +45,7 @@ namespace EthTrader.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in strategy execution: {ex.Message}");
+                await ErrorLogger.LogErrorAsync("StrategyService.ExecuteStrategyAsync", "Error in strategy execution", ex);
                 await _telegramService.SendNotificationAsync($"Error in strategy execution: {ex.Message}");
             }
         }
@@ -118,7 +118,7 @@ namespace EthTrader.Services
 
             // Calculate RSI using configuration
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
-            if (!rsiValues.Any())
+            if (rsiValues == null || !rsiValues.Any())
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate RSI.");
                 return;
@@ -133,6 +133,11 @@ namespace EthTrader.Services
 
             // Calculate MACD for additional confirmation (optional)
             var macdResult = IndicatorUtils.CalculateMacd(closes);
+            if (macdResult.Histogram == null || !macdResult.Histogram.Any())
+            {
+                await _telegramService.SendNotificationAsync("Not enough data to calculate MACD.");
+                return;
+            }
             decimal latestHistogram = macdResult.Histogram.Last();
 
             Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA({_botSettings.SmaPeriod}): {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
@@ -157,7 +162,7 @@ namespace EthTrader.Services
             
             // Calculate ATR for volatility-based position sizing
             var atrValues = IndicatorUtils.CalculateAtr(highs, lows, closes, _botSettings.AtrPeriod);
-            decimal currentAtr = atrValues.Any() ? atrValues.Last() : currentPrice * 0.02m; // Default to 2% if can't calculate
+            decimal currentAtr = (atrValues != null && atrValues.Any()) ? atrValues.Last() : currentPrice * 0.02m; // Default to 2% if can't calculate
             
             // Decide to trade if conditions are met:
             // 1. RSI below adaptive threshold
@@ -303,9 +308,19 @@ namespace EthTrader.Services
 
             // Calculate indicators
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
+            if (rsiValues == null || !rsiValues.Any())
+            {
+                await _telegramService.SendNotificationAsync("Not enough data to calculate RSI for sell signals.");
+                return;
+            }
             decimal latestRsi = rsiValues.Last();
             decimal sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
             var macdResult = IndicatorUtils.CalculateMacd(closes);
+            if (macdResult.Histogram == null || !macdResult.Histogram.Any())
+            {
+                await _telegramService.SendNotificationAsync("Not enough data to calculate MACD for sell signals.");
+                return;
+            }
             decimal latestHistogram = macdResult.Histogram.Last();
 
             // Get entry price from trade history

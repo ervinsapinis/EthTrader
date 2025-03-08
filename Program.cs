@@ -110,6 +110,7 @@ namespace EthTrader
             }
             catch (Exception ex)
             {
+                await ErrorLogger.LogErrorAsync("Program.Main", "Fatal error", ex);
                 Console.WriteLine($"Fatal error: {ex.Message}");
                 Console.WriteLine(ex.StackTrace);
                 return 1;
@@ -230,7 +231,7 @@ namespace EthTrader
                 // Fetch historical data
                 var klinesResult = await strategyService.GetHistoricalDataAsync(startDate, endDate);
                 
-                if (klinesResult == null || !klinesResult.Any())
+                if (klinesResult == null || klinesResult.Count == 0)
                 {
                     throw new Exception("Failed to fetch historical data for optimization");
                 }
