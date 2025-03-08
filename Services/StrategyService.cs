@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Linq;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Kraken.Net.Enums;
+using Kraken.Net.Objects.Models;
 using KrakenTelegramBot.Extensions;
 using KrakenTelegramBot.Utils;
 using EthTrader.Configuration;
