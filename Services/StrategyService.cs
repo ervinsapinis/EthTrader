@@ -123,13 +123,13 @@ namespace EthTrader.Services
             decimal adaptiveThreshold = isDowntrend ? _botSettings.DowntrendOversoldThreshold : _botSettings.DefaultOversoldThreshold;
 
             // Calculate MACD for additional confirmation (optional)
-            var macdResult = IndicatorUtils.CalculateMacd(closes);
-            if (macdResult.Histogram == null || macdResult.Histogram.Count == 0)
+            var (macdLine, signalLine, histogram) = IndicatorUtils.CalculateMacd(closes);
+            if (histogram == null || histogram.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate MACD.");
                 return;
             }
-            decimal latestHistogram = macdResult.Histogram.Last();
+            decimal latestHistogram = histogram.Last();
 
             Console.WriteLine($"Latest RSI: {latestRsi:F2} | SMA({_botSettings.SmaPeriod}): {sma:F2} | MACD Histogram: {latestHistogram:F2} | Current Price: {currentPrice:F2}");
             Console.WriteLine(isDowntrend ? "Downtrend detected." : "Uptrend detected.");
