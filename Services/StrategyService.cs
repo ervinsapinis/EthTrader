@@ -29,8 +29,57 @@ namespace KrakenTelegramBot.Services
 
         public async Task ExecuteStrategyAsync(CancellationToken ct = default)
         {
-            await CheckBuySignalsAsync(ct);
-            await CheckSellSignalsAsync(ct);
+            try
+            {
+                await CheckBuySignalsAsync(ct);
+                await CheckSellSignalsAsync(ct);
+                
+                // Log performance metrics periodically
+                if (DateTime.Now.Hour == 0 && DateTime.Now.Minute < 5)
+                {
+                    var performance = await TradeTracking.GetPerformanceMetricsAsync();
+                    await _telegramService.SendNotificationAsync(performance.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in strategy execution: {ex.Message}");
+                await _telegramService.SendNotificationAsync($"Error in strategy execution: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Runs a backtest of the strategy on historical data
+        /// </summary>
+        public async Task<BacktestResult> RunBacktestAsync(DateTime startDate, DateTime endDate, decimal initialCapital = 1000m)
+        {
+            try
+            {
+                // Fetch historical data
+                var klinesResult = await _krakenService.ExchangeData.GetKlinesAsync(
+                    _botSettings.TradingPair, Interval, startDate, endDate);
+                
+                if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
+                {
+                    throw new Exception($"Failed to fetch historical data: {klinesResult.Error}");
+                }
+                
+                // Run backtest
+                var engine = new BacktestEngine(_botSettings, _riskSettings, initialCapital);
+                var result = await engine.RunBacktestAsync(klinesResult.Data.ToList());
+                
+                // Log results
+                Console.WriteLine(result.ToString());
+                await _telegramService.SendNotificationAsync(result.ToString());
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Backtest error: {ex.Message}");
+                await _telegramService.SendNotificationAsync($"Backtest error: {ex.Message}");
+                throw;
+            }
         }
 
         private async Task CheckBuySignalsAsync(CancellationToken ct = default)
@@ -359,7 +408,7 @@ namespace KrakenTelegramBot.Services
                 
                 if (sellResult.Success)
                 {
-                    // Log the trade
+                    // Log the trade with profit information
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
                         OrderId = sellResult.Data.Id,
@@ -369,7 +418,8 @@ namespace KrakenTelegramBot.Services
                         Price = currentPrice,
                         Side = "Sell",
                         Type = exitType,
-                        RemainingPosition = ethBalance - quantityToSell
+                        RemainingPosition = ethBalance - quantityToSell,
+                        ProfitPercentage = currentProfit
                     });
                     
                     await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.Id}");

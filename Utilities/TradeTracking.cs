@@ -93,7 +93,68 @@ namespace KrakenTelegramBot.Utils
                 return 0;
                 
             var latestPositionTrade = positionTrades.OrderByDescending(t => t.Timestamp).First();
-            return latestPositionTrade.RemainingPosition.Value;
+            return latestPositionTrade.RemainingPosition ?? 0;
+        }
+
+        /// <summary>
+        /// Gets the performance metrics for the trading strategy
+        /// </summary>
+        public static async Task<TradingPerformance> GetPerformanceMetricsAsync()
+        {
+            var trades = await GetTradeHistoryAsync();
+            var performance = new TradingPerformance();
+            
+            if (trades.Count == 0)
+                return performance;
+                
+            // Calculate win rate, average profit, etc.
+            var completedTrades = trades.Where(t => 
+                t.Type == "FinalExit" || 
+                t.Type == "StopLoss").ToList();
+                
+            performance.TotalTrades = completedTrades.Count;
+            
+            if (performance.TotalTrades > 0)
+            {
+                var winningTrades = completedTrades.Count(t => t.ProfitPercentage.HasValue && t.ProfitPercentage.Value > 0);
+                performance.WinRate = (decimal)winningTrades / performance.TotalTrades;
+                
+                if (completedTrades.Any(t => t.ProfitPercentage.HasValue))
+                {
+                    performance.AverageProfit = completedTrades
+                        .Where(t => t.ProfitPercentage.HasValue)
+                        .Average(t => t.ProfitPercentage!.Value);
+                        
+                    performance.MaxProfit = completedTrades
+                        .Where(t => t.ProfitPercentage.HasValue)
+                        .Max(t => t.ProfitPercentage!.Value);
+                        
+                    performance.MaxLoss = completedTrades
+                        .Where(t => t.ProfitPercentage.HasValue)
+                        .Min(t => t.ProfitPercentage!.Value);
+                }
+            }
+            
+            // Calculate current open positions
+            var symbols = trades.Select(t => t.Symbol).Distinct();
+            foreach (var symbol in symbols)
+            {
+                if (symbol != null)
+                {
+                    var position = await GetCurrentPositionSizeAsync(symbol);
+                    if (position > 0)
+                    {
+                        performance.OpenPositions.Add(new OpenPosition
+                        {
+                            Symbol = symbol,
+                            Size = position,
+                            EntryPrice = await GetEstimatedEntryPriceAsync(symbol) ?? 0
+                        });
+                    }
+                }
+            }
+            
+            return performance;
         }
     }
 }
