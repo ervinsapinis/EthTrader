@@ -65,6 +65,36 @@ namespace KrakenTelegramBot.Services
                 ct: ct
             );
         }
+        
+        public async Task<WebCallResult<KrakenPlacedOrder>> PlaceMarketSellOrderAsync(
+            string tradingPair, 
+            decimal quantity, 
+            CancellationToken ct = default)
+        {
+            return await _restClient.SpotApi.Trading.PlaceOrderAsync(
+                symbol: tradingPair,
+                side: OrderSide.Sell,
+                type: OrderType.Market,
+                quantity: quantity,
+                ct: ct);
+        }
+        
+        public async Task<WebCallResult<KrakenPlacedOrder>> PlaceTrailingStopOrderAsync(
+            string tradingPair,
+            decimal quantity,
+            decimal trailingOffset,
+            CancellationToken ct = default)
+        {
+            // Note: Implementation depends on Kraken API support for trailing stops
+            // This is a simplified example
+            return await _restClient.SpotApi.Trading.PlaceOrderAsync(
+                symbol: tradingPair,
+                side: OrderSide.Sell,
+                type: OrderType.TrailingStopMarket,
+                quantity: quantity,
+                trailingDelta: trailingOffset,
+                ct: ct);
+        }
 
     }
 }

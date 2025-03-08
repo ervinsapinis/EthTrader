@@ -28,6 +28,12 @@ namespace KrakenTelegramBot.Services
         }
 
         public async Task ExecuteStrategyAsync(CancellationToken ct = default)
+        {
+            await CheckBuySignalsAsync(ct);
+            await CheckSellSignalsAsync(ct);
+        }
+
+        private async Task CheckBuySignalsAsync(CancellationToken ct = default)
         {   
             // Retrieve klines using configured count
             var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(
@@ -141,6 +147,115 @@ namespace KrakenTelegramBot.Services
                 Console.WriteLine(holdMessage);
                 await _telegramService.SendNotificationAsync(holdMessage);
             }
+        }
+
+        private async Task CheckSellSignalsAsync(CancellationToken ct = default)
+        {
+            // Get current ETH position
+            var balancesResult = await _krakenService.GetBalancesAsync(ct);
+            if (!balancesResult.Success)
+            {
+                await _telegramService.SendNotificationAsync("Error fetching balances: " + balancesResult.Error);
+                return;
+            }
+
+            // Check if we have any ETH to sell
+            if (!balancesResult.Data.TryGetValue("XETH", out decimal ethBalance) || ethBalance <= 0.002m)
+            {
+                // No ETH position or too small to sell
+                return;
+            }
+
+            // Retrieve klines for analysis
+            var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(
+                _botSettings.TradingPair, Interval, _botSettings.KlineCount, ct);
+            if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
+            {
+                await _telegramService.SendNotificationAsync("Error fetching klines: " + klinesResult.Error);
+                return;
+            }
+
+            // Extract closing prices
+            var closes = klinesResult.Data.Select(k => k.ClosePrice).ToList();
+            decimal currentPrice = closes.Last();
+
+            // Calculate indicators
+            var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
+            decimal latestRsi = rsiValues.Last();
+            decimal sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
+            var macdResult = IndicatorUtils.CalculateMacd(closes);
+            decimal latestHistogram = macdResult.Histogram.Last();
+
+            // Get entry price (if available) or estimate it
+            decimal entryPrice = await GetEstimatedEntryPriceAsync(ct) ?? currentPrice * 0.9m; // Assume 10% profit if unknown
+            decimal currentProfit = (currentPrice - entryPrice) / entryPrice;
+
+            // Check sell conditions
+            bool shouldSell = false;
+            string sellReason = "";
+
+            // 1. Take profit at overbought RSI
+            if (latestRsi > 70)
+            {
+                shouldSell = true;
+                sellReason = $"RSI overbought at {latestRsi:F2}";
+            }
+            // 2. Take profit at target percentage
+            else if (currentProfit >= 0.15m) // 15% profit target
+            {
+                shouldSell = true;
+                sellReason = $"Profit target reached: {currentProfit:P2}";
+            }
+            // 3. MACD bearish crossover while in profit
+            else if (latestHistogram < 0 && macdResult.Histogram.Skip(macdResult.Histogram.Count - 2).First() > 0 && currentProfit > 0.05m)
+            {
+                shouldSell = true;
+                sellReason = $"MACD bearish crossover while in profit: {currentProfit:P2}";
+            }
+            // 4. Trend reversal (price below SMA) while in good profit
+            else if (currentPrice < sma && currentProfit > 0.08m)
+            {
+                shouldSell = true;
+                sellReason = $"Trend reversal while in profit: {currentProfit:P2}";
+            }
+
+            if (shouldSell)
+            {
+                // Determine how much to sell (all ETH in this case)
+                decimal quantityToSell = ethBalance;
+                
+                string sellMessage = $"Sell signal: {sellReason}\n" +
+                    $"Current price: {currentPrice:F2} EUR, Entry price: {entryPrice:F2} EUR\n" +
+                    $"Profit: {currentProfit:P2}, Selling {quantityToSell:F6} ETH";
+                
+                await _telegramService.SendNotificationAsync(sellMessage);
+                
+                // Place market sell order
+                var sellResult = await _krakenService.PlaceMarketSellOrderAsync(_botSettings.TradingPair, quantityToSell, ct);
+                
+                if (sellResult.Success)
+                {
+                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.OrderId}");
+                }
+                else
+                {
+                    await _telegramService.SendNotificationAsync($"Error executing sell order: {sellResult.Error}");
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Gets the estimated entry price for the current ETH position
+        /// </summary>
+        private async Task<decimal?> GetEstimatedEntryPriceAsync(CancellationToken ct)
+        {
+            // In a real implementation, you would:
+            // 1. Query your trade history from Kraken
+            // 2. Find the most recent buy orders for ETH
+            // 3. Calculate the weighted average entry price
+            
+            // For now, we'll return null (unknown entry price)
+            return null;
         }
         
         /// <summary>
