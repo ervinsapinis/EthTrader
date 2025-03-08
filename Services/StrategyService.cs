@@ -12,23 +12,13 @@ using EthTrader.Utilities;
 
 namespace EthTrader.Services
 {
-    public class StrategyService
+    public class StrategyService(KrakenService krakenService, TelegramService telegramService)
     {
-        private readonly KrakenService _krakenService;
-        private readonly TelegramService _telegramService;
-        private readonly BotSettings _botSettings;
-        private readonly RiskSettings _riskSettings;
+        private readonly KrakenService _krakenService = krakenService;
+        private readonly TelegramService _telegramService = telegramService;
+        private readonly BotSettings _botSettings = ConfigLoader.BotSettings;
+        private readonly RiskSettings _riskSettings = ConfigLoader.RiskSettings;
         private const KlineInterval Interval = KlineInterval.OneHour;
-
-        public StrategyService(
-            KrakenService krakenService, 
-            TelegramService telegramService)
-        {
-            _krakenService = krakenService;
-            _telegramService = telegramService;
-            _botSettings = ConfigLoader.BotSettings;
-            _riskSettings = ConfigLoader.RiskSettings;
-        }
 
         public async Task ExecuteStrategyAsync(CancellationToken ct = default)
         {
@@ -54,12 +44,12 @@ namespace EthTrader.Services
         /// <summary>
         /// Gets historical data for the configured trading pair
         /// </summary>
-        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate, CancellationToken ct = default)
+        public async Task<List<KrakenKline>> GetHistoricalDataAsync(DateTime startDate, DateTime endDate)
         {
             try
             {
                 var klinesResult = await _krakenService.ExchangeData.GetKlinesAsync(
-                    _botSettings.TradingPair, Interval, startDate, endDate);
+                    _botSettings.TradingPair, Interval, startDate, endDate, ct);
                 
                 if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
                 {
@@ -108,7 +98,7 @@ namespace EthTrader.Services
             // Retrieve klines using configured count
             var klinesResult = await _krakenService.ExchangeData.GetKlinesLimitedAsync(
                 _botSettings.TradingPair, Interval, _botSettings.KlineCount, ct);
-            if (!klinesResult.Success || klinesResult.Data == null || !klinesResult.Data.Any())
+            if (!klinesResult.Success || klinesResult.Data == null || klinesResult.Data.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Error fetching klines: " + klinesResult.Error);
                 return;
@@ -119,7 +109,7 @@ namespace EthTrader.Services
 
             // Calculate RSI using configuration
             var rsiValues = IndicatorUtils.CalculateRsi(closes, _botSettings.RsiPeriod);
-            if (rsiValues == null || !rsiValues.Any())
+            if (rsiValues == null || rsiValues.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate RSI.");
                 return;
@@ -134,7 +124,7 @@ namespace EthTrader.Services
 
             // Calculate MACD for additional confirmation (optional)
             var macdResult = IndicatorUtils.CalculateMacd(closes);
-            if (macdResult.Histogram == null || !macdResult.Histogram.Any())
+            if (macdResult.Histogram == null || macdResult.Histogram.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate MACD.");
                 return;
@@ -150,7 +140,7 @@ namespace EthTrader.Services
             
             // Check if current volume is above average (indicating stronger move)
             bool volumeConfirmation = false;
-            if (volumeMA.Any())
+            if (volumeMA.Count > 0)
             {
                 decimal currentVolume = volumes.Last();
                 decimal avgVolume = volumeMA.Last();
@@ -163,7 +153,7 @@ namespace EthTrader.Services
             
             // Calculate ATR for volatility-based position sizing
             var atrValues = IndicatorUtils.CalculateAtr(highs, lows, closes, _botSettings.AtrPeriod);
-            decimal currentAtr = (atrValues != null && atrValues.Any()) ? atrValues.Last() : currentPrice * 0.02m; // Default to 2% if can't calculate
+            decimal currentAtr = (atrValues != null && atrValues.Count > 0) ? atrValues.Last() : currentPrice * 0.02m; // Default to 2% if can't calculate
             
             // Decide to trade if conditions are met:
             // 1. RSI below adaptive threshold
@@ -241,7 +231,7 @@ namespace EthTrader.Services
                     // Log the trade
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = orderResult.Data.Id,
+                        OrderId = orderResult.Data.OrderId,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToBuy,
@@ -316,13 +306,13 @@ namespace EthTrader.Services
             }
             decimal latestRsi = rsiValues.Last();
             decimal sma = IndicatorUtils.CalculateSma(closes, _botSettings.SmaPeriod);
-            var macdResult = IndicatorUtils.CalculateMacd(closes);
-            if (macdResult.Histogram == null || !macdResult.Histogram.Any())
+            var (macdLine, signalLine, histogram) = IndicatorUtils.CalculateMacd(closes);
+            if (histogram == null || histogram.Count == 0)
             {
                 await _telegramService.SendNotificationAsync("Not enough data to calculate MACD for sell signals.");
                 return;
             }
-            decimal latestHistogram = macdResult.Histogram.Last();
+            decimal latestHistogram = histogram.Last();
 
             // Get entry price from trade history
             decimal? storedEntryPrice = await TradeTracking.GetEstimatedEntryPriceAsync(_botSettings.TradingPair);
@@ -380,7 +370,7 @@ namespace EthTrader.Services
             }
             // 5. MACD bearish crossover while in profit
             else if (latestHistogram < 0 && 
-                     macdResult.Histogram.Skip(macdResult.Histogram.Count - 2).First() > 0 && 
+                     histogram.Skip(histogram.Count - 2).First() > 0 && 
                      currentProfit > 0.05m)
             {
                 shouldSell = true;
@@ -413,7 +403,7 @@ namespace EthTrader.Services
                 
                 if (trailingStopResult.Success)
                 {
-                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.Id}");
+                    await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order ID: {trailingStopResult.Data.OrderId}");
                 }
                 else
                 {
@@ -447,7 +437,7 @@ namespace EthTrader.Services
                     // Log the trade with profit information
                     await TradeTracking.LogTradeAsync(new TradeRecord
                     {
-                        OrderId = sellResult.Data.Id,
+                        OrderId = sellResult.Data.OrderId,
                         Timestamp = DateTime.UtcNow,
                         Symbol = _botSettings.TradingPair,
                         Quantity = quantityToSell,
@@ -458,7 +448,7 @@ namespace EthTrader.Services
                         ProfitPercentage = currentProfit
                     });
                     
-                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.Id}");
+                    await _telegramService.SendNotificationAsync($"Sell order executed successfully. Order ID: {sellResult.Data.OrderId}");
                 }
                 else
                 {

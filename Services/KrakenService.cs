@@ -93,11 +93,12 @@ namespace EthTrader.Services
             
             // Get current price
             var tickerResult = await _restClient.SpotApi.ExchangeData.GetTickerAsync(tradingPair, ct);
-            if (!tickerResult.Success || !tickerResult.Data.Any())
+            if (!tickerResult.Success || tickerResult.Data.Count == 0)
             {
-                return WebCallResult<KrakenPlacedOrder>.CreateErrorResult(
+                return new WebCallResult<KrakenPlacedOrder>(
                     tickerResult.ResponseStatusCode,
-                    tickerResult.Error ?? new CryptoExchange.Net.Objects.Error("No ticker data available"));
+                    tickerResult.Error ?? new CryptoExchange.Net.Objects.Error("No ticker data available"),
+                    null);
             }
             
             decimal currentPrice = tickerResult.Data.First().Value.LastTrade.Price;

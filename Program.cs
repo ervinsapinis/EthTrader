@@ -38,13 +38,13 @@ namespace EthTrader
                 
                 var startOption = new Option<DateTime>(
                     "--start",
-                    "Start date for backtest (yyyy-MM-dd)");
-                startOption.IsRequired = true;
+                    "Start date for backtest (yyyy-MM-dd)")
+                { IsRequired = true };
                 
                 var endOption = new Option<DateTime>(
                     "--end",
-                    "End date for backtest (yyyy-MM-dd)");
-                endOption.IsRequired = true;
+                    "End date for backtest (yyyy-MM-dd)")
+                { IsRequired = true };
                 
                 var capitalOption = new Option<decimal>(
                     "--capital",
@@ -72,13 +72,13 @@ namespace EthTrader
                 
                 var optimizeStartOption = new Option<DateTime>(
                     "--start",
-                    "Start date for optimization (yyyy-MM-dd)");
-                optimizeStartOption.IsRequired = true;
+                    "Start date for optimization (yyyy-MM-dd)")
+                { IsRequired = true };
                 
                 var optimizeEndOption = new Option<DateTime>(
                     "--end",
-                    "End date for optimization (yyyy-MM-dd)");
-                optimizeEndOption.IsRequired = true;
+                    "End date for optimization (yyyy-MM-dd)")
+                { IsRequired = true };
                 
                 var optimizeCapitalOption = new Option<decimal>(
                     "--capital",
@@ -103,7 +103,7 @@ namespace EthTrader
                 // If no args, default to run
                 if (args.Length == 0)
                 {
-                    args = new[] { "run" };
+                    args = ["run"];
                 }
                 
                 // Parse and execute
