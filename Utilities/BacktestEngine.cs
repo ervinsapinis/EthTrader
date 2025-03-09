@@ -53,8 +53,8 @@ namespace KrakenTelegramBot.Utils
             _maxDrawdown = 0;
             _ethPosition = 0;
         }
-        
-        public async Task<BacktestResult> RunBacktestAsync(List<KrakenKline> klines)
+
+        public Task<BacktestResult> RunBacktestAsync(List<KrakenKline> klines)
         {
             // Reset state
             _capital = _initialCapital;
@@ -63,13 +63,13 @@ namespace KrakenTelegramBot.Utils
             _ethPosition = 0;
             _entryPrice = null;
             _trades.Clear();
-            
+
             // Process each candle
             for (int i = _botSettings.KlineCount; i < klines.Count; i++)
             {
                 // Get data window for analysis
                 var window = klines.Skip(i - _botSettings.KlineCount).Take(_botSettings.KlineCount).ToList();
-                
+
                 // Check for buy signal
                 if (_ethPosition == 0)
                 {
@@ -87,7 +87,7 @@ namespace KrakenTelegramBot.Utils
                     {
                         ExecuteSell(window.Last(), i, "FinalExit");
                     }
-                    
+
                     // Check stop loss
                     var currentPrice = window.Last().ClosePrice;
                     var stopPrice = _entryPrice.Value * (1 - _botSettings.StopLossPercentage);
@@ -96,17 +96,17 @@ namespace KrakenTelegramBot.Utils
                         ExecuteSell(window.Last(), i, "StopLoss");
                     }
                 }
-                
+
                 // Update max drawdown
                 UpdateDrawdown();
             }
-            
+
             // Close any remaining position at the end
             if (_ethPosition > 0 && klines.Count != 0)
             {
                 ExecuteSell(klines.Last(), klines.Count - 1, "FinalExit");
             }
-            
+
             // Calculate results
             var result = new BacktestResult
             {
@@ -115,15 +115,15 @@ namespace KrakenTelegramBot.Utils
                 TotalReturn = (_capital / _initialCapital) - 1,
                 TotalTrades = _trades.Count(t => t.Type == "Entry"),
                 WinningTrades = _trades.Count(t => t.Type == "FinalExit" && t.ProfitPercentage > 0),
-                LosingTrades = _trades.Count(t => t.Type == "FinalExit" && t.ProfitPercentage <= 0) + 
+                LosingTrades = _trades.Count(t => t.Type == "FinalExit" && t.ProfitPercentage <= 0) +
                                _trades.Count(t => t.Type == "StopLoss"),
                 MaxDrawdown = _maxDrawdown,
                 Trades = _trades
             };
-            
-            return result;
+
+            // Since there are no async operations in this method, we can simply return the result wrapped in a completed task
+            return Task.FromResult(result);
         }
-        
         private bool CheckBuySignal(List<KrakenKline> window)
         {
             // Extract data

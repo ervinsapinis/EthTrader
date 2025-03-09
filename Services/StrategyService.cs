@@ -415,24 +415,24 @@ namespace EthTrader.Services
                 exitType = "FinalExit";
             }
 
+            // Extract portion of CheckSellSignalsAsync that needs updating
             // Check if we should set up a trailing stop instead of selling
             if (!shouldSell && currentProfit >= _botSettings.TrailingStopActivationProfit)
             {
                 // First check if we already have open orders
                 var openOrdersResult = await _krakenService.GetOpenOrdersAsync(ct);
-                
+
                 if (!openOrdersResult.Success)
                 {
                     await _telegramService.SendNotificationAsync($"Error checking open orders: {openOrdersResult.Error}");
                     return;
                 }
-                
+
                 // Check if there's already a stop loss order for this trading pair
                 var existingStopOrders = openOrdersResult.Data
-                    .Where(o => o.Symbol == _botSettings.TradingPair && 
-                               (o.Type == OrderType.StopLoss || o.Type == OrderType.Stop))
+                    .Where(o => o.Symbol == _botSettings.TradingPair && o.Type == OrderType.StopLoss)
                     .ToList();
-                
+
                 if (existingStopOrders.Any())
                 {
                     await _telegramService.SendNotificationAsync(
@@ -440,34 +440,43 @@ namespace EthTrader.Services
                         $"Existing stop orders: {existingStopOrders.Count}");
                     return;
                 }
-                
-                // Set up trailing stop for remaining position
+
+                // Set up trailing stop for the position
                 decimal trailingStopOffset = currentPrice * _botSettings.TrailingStopPercentage;
-                
+
                 string trailingStopMessage = $"Setting trailing stop: Current profit {currentProfit:P2} exceeds activation threshold.\n" +
-                    $"Current price: {currentPrice:F2} EUR, Trailing offset: {trailingStopOffset:F2} EUR";
-                
+                    $"Current price: {currentPrice:F2} EUR, Trailing offset: {trailingStopOffset:F2} EUR\n" +
+                    $"ETH Balance: {ethBalance:F8} ETH";
+
                 await _telegramService.SendNotificationAsync(trailingStopMessage);
-                
+
+                // Our updated service will automatically try with reduced amounts
                 var trailingStopResult = await _krakenService.PlaceTrailingStopOrderAsync(
                     _botSettings.TradingPair, ethBalance, _botSettings.TrailingStopPercentage, ct);
 
                 if (trailingStopResult.Success)
                 {
                     await _telegramService.SendNotificationAsync($"Trailing stop set successfully. Order IDs: {string.Join(", ", trailingStopResult.Data.OrderIds)}");
+
+                    // Attempt to retrieve the actual quantity used in the order
+                    decimal? orderQuantity = null;
+                    if (trailingStopResult.Data?.OrderIds?.Any() == true)
+                    {
+                        var orderId = trailingStopResult.Data.OrderIds.First();
+                        await _telegramService.SendNotificationAsync($"Trailing stop set for approximately {orderQuantity:F8} ETH (reduced from {ethBalance:F8} ETH)");
+                    }
                 }
                 else
                 {
                     await _telegramService.SendNotificationAsync($"Error setting trailing stop: {trailingStopResult.Error}");
-                    
-                    // Log detailed error for debugging
-                    await ErrorLogger.LogErrorAsync("StrategyService.CheckSellSignalsAsync", 
-                        $"Failed to place trailing stop. Error: {trailingStopResult.Error}, " +
+
+                    // Fix the error logger call
+                    await ErrorLogger.LogErrorAsync("StrategyService.CheckSellSignalsAsync",
+                        $"Failed to place trailing stop after multiple attempts. Error: {trailingStopResult.Error}, " +
                         $"ETH Balance: {ethBalance}, Current Price: {currentPrice}, " +
                         $"Current Profit: {currentProfit:P2}");
                 }
             }
-
             if (shouldSell && quantityToSell > 0)
             {
                 // Ensure we're not trying to sell more than we have
@@ -513,8 +522,8 @@ namespace EthTrader.Services
                 }
             }
         }
-        
-        
+
+
         /// <summary>
         /// Checks and manages existing orders to avoid conflicts
         /// </summary>
@@ -529,12 +538,12 @@ namespace EthTrader.Services
                     await _telegramService.SendNotificationAsync($"Error checking open orders: {openOrdersResult.Error}");
                     return false;
                 }
-                
+
                 // Filter orders for the specified symbol
                 var existingOrders = openOrdersResult.Data
                     .Where(o => o.Symbol == symbol)
                     .ToList();
-                
+
                 if (existingOrders.Any())
                 {
                     // Log information about existing orders
@@ -544,24 +553,46 @@ namespace EthTrader.Services
                         orderInfo += $"- Order ID: {order.Id}, Type: {order.Type}, Side: {order.Side}, " +
                                      $"Quantity: {order.Quantity}, Price: {order.Price}\n";
                     }
-                    
+
                     await ErrorLogger.LogErrorAsync("StrategyService.ManageExistingOrdersAsync", orderInfo);
-                    
+
                     // Return true to indicate there are existing orders
                     return true;
                 }
-                
+
                 // No existing orders found
                 return false;
             }
             catch (Exception ex)
             {
-                await ErrorLogger.LogErrorAsync("StrategyService.ManageExistingOrdersAsync", 
+                await ErrorLogger.LogErrorAsync("StrategyService.ManageExistingOrdersAsync",
                     $"Error managing existing orders: {ex.Message}", ex);
                 return false;
             }
         }
-        
+
+        private async Task CheckForExistingStopOrdersAsync(string tradingPair, CancellationToken ct = default)
+        {
+            var openOrdersResult = await _krakenService.GetOpenOrdersAsync(ct);
+
+            if (!openOrdersResult.Success)
+            {
+                await _telegramService.SendNotificationAsync($"Error checking open orders: {openOrdersResult.Error}");
+                return;
+            }
+
+            // Check if there's already a stop loss order for this trading pair
+            var existingStopOrders = openOrdersResult.Data
+                .Where(o => o.Symbol == tradingPair && o.Type == OrderType.StopLoss)
+                .ToList();
+
+            if (existingStopOrders.Any())
+            {
+                await _telegramService.SendNotificationAsync(
+                    $"Found {existingStopOrders.Count} existing stop orders for {tradingPair}");
+            }
+        }
+
         /// <summary>
         /// Gets the appropriate risk percentage based on account equity and risk settings
         /// </summary>

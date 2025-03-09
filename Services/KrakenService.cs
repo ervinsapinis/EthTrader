@@ -13,6 +13,7 @@ using Kraken.Net.Interfaces.Clients.SpotApi;
 using EthTrader.Utilities;
 using System.Net;
 using System.Net.Http;
+using EthTrader.Models;
 
 namespace EthTrader.Services
 {
@@ -83,6 +84,7 @@ namespace EthTrader.Services
                 ct: ct);
         }
 
+
         public async Task<WebCallResult<KrakenPlacedOrder>> PlaceTrailingStopOrderAsync(
             string tradingPair,
             decimal quantity,
@@ -99,9 +101,9 @@ namespace EthTrader.Services
             }
 
             // Check if there's already a stop loss order for this trading pair
-            var existingStopOrders = openOrdersResult.Data
-                .Where(o => o.Symbol == tradingPair && 
-                           (o.Type == OrderType.StopLoss || o.Type == OrderType.Stop))
+            var existingStopOrders = openOrdersResult.Data.Open
+                .Where(o => o.Value.OrderDetails.Symbol == tradingPair &&
+                          o.Value.OrderDetails.Type == OrderType.StopLoss)
                 .ToList();
 
             if (existingStopOrders.Any())
@@ -109,12 +111,14 @@ namespace EthTrader.Services
                 // Cancel existing stop orders before placing a new one
                 foreach (var order in existingStopOrders)
                 {
-                    await _restClient.SpotApi.Trading.CancelOrderAsync(order.Id, ct: ct);
+                    await _restClient.SpotApi.Trading.CancelOrderAsync(order.Key, ct: ct);
                     await Task.Delay(500); // Small delay to ensure order is cancelled
                 }
-                
-                // Log that we're replacing existing orders
-                await ErrorLogger.LogErrorAsync("KrakenService", 
+
+                // Add a longer delay to ensure orders are fully removed
+                await Task.Delay(2000);
+
+                await ErrorLogger.LogErrorAsync("KrakenService",
                     $"Cancelled {existingStopOrders.Count} existing stop orders before placing new trailing stop");
             }
 
@@ -132,21 +136,121 @@ namespace EthTrader.Services
             // Calculate stop price and round to 2 decimal places as required by Kraken
             decimal stopPrice = Math.Round(currentPrice * (1 - trailingOffset), 2);
 
-            return await _restClient.SpotApi.Trading.PlaceOrderAsync(
-                symbol: tradingPair,
-                side: OrderSide.Sell,
-                type: OrderType.StopLoss,
-                quantity: quantity,
-                price: stopPrice,
-                ct: ct);
+            // Try multiple quantity reductions until we succeed or hit the minimum
+            decimal[] reductionFactors = { 0.95m, 0.90m, 0.85m, 0.80m };
+
+            foreach (var factor in reductionFactors)
+            {
+                // Adjust quantity to account for potential fees or reserved amounts
+                decimal adjustedQuantity = Math.Round(quantity * factor, 8);
+
+                // Ensure it still meets minimum order size (typically 0.002 ETH for Kraken)
+                if (adjustedQuantity < 0.002m)
+                {
+                    continue; // Try the next factor if this makes it too small
+                }
+
+                // Log the adjustment
+                string logMessage = $"Trying trailing stop with {factor:P0} of balance: {adjustedQuantity} ETH (original: {quantity} ETH)";
+                await ErrorLogger.LogErrorAsync("KrakenService", logMessage);
+
+                var orderResult = await _restClient.SpotApi.Trading.PlaceOrderAsync(
+                    symbol: tradingPair,
+                    side: OrderSide.Sell,
+                    type: OrderType.StopLoss,
+                    quantity: adjustedQuantity,
+                    price: stopPrice,
+                    ct: ct);
+
+                if (orderResult.Success)
+                {
+                    // If successful, return the result
+                    string successMessage = $"Successfully placed trailing stop using {factor:P0} of available balance";
+                    await ErrorLogger.LogErrorAsync("KrakenService", successMessage);
+                    return orderResult;
+                }
+
+                // If we hit a different error than insufficient funds, stop trying
+                if (orderResult.Error?.Message != null &&
+                    !orderResult.Error.Message.Contains("Insufficient funds"))
+                {
+                    return orderResult;
+                }
+
+                // Add a delay before trying with a lower amount
+                await Task.Delay(500);
+            }
+
+            // If we get here, all attempts failed - try one last attempt with a very small amount
+            decimal minimumQuantity = 0.002m; // Kraken's minimum order size for ETH
+
+            if (quantity > minimumQuantity * 1.1m) // Only if we have enough for minimum + buffer
+            {
+                string lastAttemptMessage = $"All reduction attempts failed, trying minimum order size: {minimumQuantity} ETH";
+                await ErrorLogger.LogErrorAsync("KrakenService", lastAttemptMessage);
+
+                return await _restClient.SpotApi.Trading.PlaceOrderAsync(
+                    symbol: tradingPair,
+                    side: OrderSide.Sell,
+                    type: OrderType.StopLoss,
+                    quantity: minimumQuantity,
+                    price: stopPrice,
+                    ct: ct);
+            }
+
+            // If even that failed or we don't have enough for minimum, return the last error
+            return new WebCallResult<KrakenPlacedOrder>(
+                new ServerError(0, "Failed to place order with any quantity reduction")
+            );
         }
 
         /// <summary>
         /// Gets all open orders for the account
         /// </summary>
-        public async Task<WebCallResult<IEnumerable<KrakenOpenOrder>>> GetOpenOrdersAsync(CancellationToken ct = default)
+        public async Task<WebCallResult<IEnumerable<Models.KrakenOpenOrder>>> GetOpenOrdersAsync(CancellationToken ct = default)
         {
-            return await _restClient.SpotApi.Trading.GetOpenOrdersAsync(ct: ct);
+            var result = await _restClient.SpotApi.Trading.GetOpenOrdersAsync(ct: ct);
+
+            if (!result.Success)
+            {
+                // Use the error constructor for WebCallResult
+                return new WebCallResult<IEnumerable<Models.KrakenOpenOrder>>(
+                    result.Error ?? new ServerError(0, "Unknown error")
+                );
+            }
+
+            // Convert from Kraken's OpenOrdersPage to our custom KrakenOpenOrder
+            var orders = new List<Models.KrakenOpenOrder>();
+
+            foreach (var orderEntry in result.Data.Open)
+            {
+                orders.Add(new Models.KrakenOpenOrder
+                {
+                    Id = orderEntry.Key,
+                    Symbol = orderEntry.Value.OrderDetails.Symbol,
+                    Type = orderEntry.Value.OrderDetails.Type,
+                    Side = orderEntry.Value.OrderDetails.Side,
+                    Quantity = orderEntry.Value.Quantity,
+                    Price = orderEntry.Value.Price
+                });
+            }
+
+            // Use the full constructor to create a success WebCallResult
+            return new WebCallResult<IEnumerable<Models.KrakenOpenOrder>>(
+                result.ResponseStatusCode,
+                result.ResponseHeaders,
+                result.ResponseTime,
+                result.ResponseLength,
+                result.OriginalData,
+                result.RequestId,
+                result.RequestUrl,
+                result.RequestBody,
+                result.RequestMethod,
+                result.RequestHeaders,
+                result.DataSource,
+                orders,  // Our converted data
+                null     // No error for success
+            );
         }
     }
 }
